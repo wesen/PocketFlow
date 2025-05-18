@@ -1,12 +1,15 @@
 module github.com/The-Pocket/PocketFlow/go
 
-go 1.21
+go 1.23.0
+
+toolchain go1.24.3
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.3.5
 	github.com/google/uuid v1.5.0
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/rs/zerolog v1.34.0
+	golang.org/x/sync v0.14.0
 )
 
 require (

@@ -1398,120 +1398,239 @@ When designing flows with the builder pattern, consider these best practices:
 
 ## 7. System Setup and Registration
 
-### 7.1 Comprehensive Initialization Process
+### 7.1 The Runner API: Simplified Initialization Process
 
-Setting up a PocketFlow application involves initializing and connecting several components in the right order. This section provides a detailed guide for properly setting up your system.
+Setting up a PocketFlow application involves initializing and connecting several components. To simplify this process, PocketFlow provides a powerful Runner API that encapsulates all the necessary setup in a few concise lines of code.
 
 ```go
 func main() {
-    // Initialize the logger with appropriate configuration
-    log := logger.Get()
-    log.Info().Msg("Initializing PocketFlow event-driven system")
-    
-    // Initialize the state store with appropriate configuration
-    // For development, an in-memory or file-based SQLite is convenient
-    // For production, consider a more robust persistence layer
-    stateStore, err := event.NewSQLiteStateStore(":memory:")
-    if err != nil {
-        log.Fatal().Err(err).Msg("Failed to create state store")
+    // Create a runner with custom options
+    runner := event.NewRunner(
+        event.WithDebugMode(true),
+        event.WithFlowCompletedHandler(func(completed event.FlowCompletedMessage) error {
+            log.Info().Msg("🎉 Flow completed successfully!")
+            return nil
+        }),
+    )
+
+    // Initialize the runner
+    if err := runner.Init(); err != nil {
+        log.Fatal().Err(err).Msg("Failed to initialize runner")
         os.Exit(1)
     }
     
-    // Create a flow registry
-    // For production, consider a persistent registry implementation
-    flowRegistry := event.NewInMemoryFlowRegistry()
-    
-    // Set up the message router with appropriate configuration
-    watermillRouter := event.NewWatermillEventRouter(nil)
-    publisher := event.NewWatermillPublisher(watermillRouter.PubSub)
-    
     // Create and register node workers
-    questionNode := event.NewQuestionNodeWorker(publisher, stateStore, "What is your question?")
-    answerNode := event.NewAnswerNodeWorker(publisher, stateStore, mockLLM)
-    watermillRouter.RegisterAllNodeWorkers(questionNode, answerNode)
+    questionNode := event.NewQuestionNodeWorker(runner.Publisher(), runner.StateStore(), "What is your question?")
+    answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
+    runner.RegisterNodeWorkers(questionNode, answerNode)
     
     // Define nodes for a flow
-    questionNodeDef := event.NewNode("question", map[string]interface{}{
+    questionNodeDef := impl.NewNode("question", map[string]interface{}{
         "question": "What would you like to know about?",
     })
-    answerNodeDef := event.NewNode("answer", map[string]interface{}{})
+    answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
     
     // Define a flow using the builder pattern
-    testFlow := event.NewFlowBuilder().
+    testFlow := impl.NewFlowBuilder("basic").
         Begin(questionNodeDef).
         Then(answerNodeDef).
         Build()
     
-    // Register the flow with the registry
-    flowRegistry.RegisterFlow(testFlow.ID(), testFlow)
+    // Register the flow
+    runner.RegisterFlow(testFlow)
     
-    // Create and register a flow worker
-    qaFlowWorker := event.NewGenericFlowWorker(
-        testFlow.Type(),
-        publisher,
-        stateStore,
-        flowRegistry,
-    )
-    watermillRouter.RegisterFlowWorker(qaFlowWorker)
-    
-    // Set up event handlers
-    watermillRouter.SetupFlowCompletionHandler(func(completed event.FlowCompletedMessage) error {
-        log.Info().Msg("🎉 Flow completed successfully!")
-        return nil
-    })
-    
-    watermillRouter.SetupFlowFailureHandler(func(failed event.FlowFailedMessage) error {
-        log.Error().Str("errorMessage", failed.ErrorMessage).Msg("❌ Flow failed!")
-        return nil
-    })
-    
-    // Start the router in a goroutine
-    ctx, cancel := context.WithCancel(context.Background())
+    // Start the runner
+    ctx, cancel := runner.Start()
     defer cancel()
     
-    go func() {
-        if err := watermillRouter.Start(ctx); err != nil {
-            log.Fatal().Err(err).Msg("Router error")
-        }
-    }()
-    
-    // Start the flow
-    initialData := map[string]interface{}{
-        "started_at": time.Now().Format(time.RFC3339),
+    // Execute the flow and wait for completion
+    flowID, err := runner.RunFlowAndWait(testFlow, nil)
+    if err != nil {
+        log.Error().Err(err).Msg("Flow execution failed")
+    } else {
+        log.Info().Str("flowID", flowID).Msg("Flow execution completed successfully")
     }
-    
-    // Generate a flow execution ID and start the flow
-    flowExecutionID := uuid.New().String()
-    publisher.Publish(
-        fmt.Sprintf("flow.%s", testFlow.Type()),
-        core.FlowStartRequestedMessage{
-            BaseMessage: core.BaseMessage{
-                MessageType:     core.MessageTypeFlowStartRequested,
-                FlowExecutionID: flowExecutionID,
-                Timestamp:       time.Now(),
-            },
-            FlowType:          testFlow.Type(),
-            FlowDefinitionID:  testFlow.ID(),
-            InitialSharedData: initialData,
-        },
-    )
-    
-    log.Info().Str("executionID", flowExecutionID).Msg("Flow started")
-    
-    // Wait for interruption signal
-    sigCh := make(chan os.Signal, 1)
-    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-    <-sigCh
     
     // Clean up
-    err = watermillRouter.Stop()
-    if err != nil {
-        log.Error().Err(err).Msg("Error stopping router")
-    }
+    runner.Stop()
 }
 ```
 
-### 7.2 Configuration Best Practices
+### 7.2 The Runner API
+
+The Runner API provides a clean, fluent interface for setting up and executing PocketFlow applications. Here's a detailed overview of the key components:
+
+#### Creating a Runner
+
+```go
+// Create with default options
+runner := event.NewRunner()
+
+// Create with custom options
+runner := event.NewRunner(
+    event.WithDatabaseURL("path/to/db.sqlite"),
+    event.WithDebugMode(true),
+    event.WithFlowCompletedHandler(customHandler),
+)
+```
+
+#### Available Options
+
+- `WithDatabaseURL(url string)`: Sets the database URL for the state store
+- `WithDebugMode(enabled bool)`: Enables or disables debug logging
+- `WithFlowCompletedHandler(handler func(FlowCompletedMessage) error)`: Sets a custom flow completion handler
+- `WithFlowFailedHandler(handler func(FlowFailedMessage) error)`: Sets a custom flow failure handler
+- `WithProgressHandler(handler func(ProgressUpdateMessage) error)`: Sets a custom progress handler
+
+#### Initializing and Starting
+
+```go
+// Initialize all components
+runner.Init()
+
+// Start the router and set up signal handling
+ctx, cancel := runner.Start()
+defer cancel() // Ensure resources are cleaned up
+```
+
+#### Registering Components
+
+```go
+// Register individual node workers
+runner.RegisterNodeWorker(myNodeWorker)
+
+// Register multiple node workers at once
+runner.RegisterNodeWorkers(questionNode, answerNode, toolNode)
+
+// Register a flow (automatically creates and registers the flow worker)
+runner.RegisterFlow(myFlow)
+```
+
+#### Executing Flows
+
+```go
+// Run a flow and continue immediately
+flowID := runner.RunFlow(myFlow, initialData)
+
+// Run a flow and wait for completion
+flowID, err := runner.RunFlowAndWait(myFlow, initialData)
+
+// Wait for a specific flow to complete
+err := runner.WaitForFlow(flowID)
+```
+
+#### Accessing Results and Utilities
+
+```go
+// Get shared data for a flow execution
+sharedData, err := runner.GetSharedData(flowID)
+
+// Access the underlying components
+stateStore := runner.StateStore()
+publisher := runner.Publisher()
+flowRegistry := runner.FlowRegistry()
+```
+
+#### Cleanup
+
+```go
+// Stop the runner and clean up resources
+runner.Stop()
+```
+
+### 7.3 Building Multi-Agent Systems with the Runner API
+
+The Runner API makes it simple to build sophisticated multi-agent systems, where multiple flows can interact with each other or operate independently in parallel. Here's how to build a multi-agent system:
+
+```go
+// Create a single runner for all agents
+runner := event.NewRunner(
+    event.WithDatabaseURL("agents.db"),  // Shared database for all agents
+    event.WithDebugMode(true),
+)
+runner.Init()
+
+// Register shared node workers that can be used by multiple flows
+llmNode := event.NewLLMNodeWorker(runner.Publisher(), runner.StateStore(), llmClient)
+webSearchNode := event.NewWebSearchNodeWorker(runner.Publisher(), runner.StateStore(), searchClient)
+runner.RegisterNodeWorkers(llmNode, webSearchNode)
+
+// Create and register the researcher agent flow
+researcherFlow := buildResearcherFlow()
+runner.RegisterFlow(researcherFlow)
+
+// Create and register the writer agent flow
+writerFlow := buildWriterFlow()
+runner.RegisterFlow(writerFlow)
+
+// Create and register the supervisor flow that coordinates the agents
+supervisorFlow := buildSupervisorFlow()
+runner.RegisterFlow(supervisorFlow)
+
+// Start the runner
+ctx, cancel := runner.Start()
+defer cancel()
+
+// Execute the supervisor flow, which will manage the other flows
+flowID, err := runner.RunFlowAndWait(supervisorFlow, map[string]interface{}{
+    "topic": "Artificial Intelligence",
+    "max_tokens": 2000,
+})
+
+if err != nil {
+    log.Error().Err(err).Msg("Supervisor flow failed")
+    return
+}
+
+// Get the results
+results, _ := runner.GetSharedData(flowID)
+finalReport := results["final_report"].(string)
+fmt.Println(finalReport)
+```
+
+The supervisor flow can launch and coordinate the other flows, monitoring their progress and collecting their results:
+
+```go
+// Node worker that launches and monitors sub-flows
+type LaunchSubFlowHandler struct {
+    Runner *event.Runner
+}
+
+func (h *LaunchSubFlowHandler) Exec(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+    // Get the flow to launch from parameters
+    flowType := ctx.Params["flow_type"].(string)
+    
+    // Get the flow from the registry
+    flow, err := h.Runner.FlowRegistry().GetFlow(flowType)
+    if err != nil {
+        return nil, fmt.Errorf("flow not found: %w", err)
+    }
+    
+    // Prepare initial data for the sub-flow
+    initialData := map[string]interface{}{
+        "parent_flow_id": ctx.FlowExecutionID,
+        "topic": ctx.SharedData["topic"],
+    }
+    
+    // Launch the sub-flow
+    subFlowID := h.Runner.RunFlow(flow, initialData)
+    
+    // Wait for the sub-flow to complete
+    if err := h.Runner.WaitForFlow(subFlowID); err != nil {
+        return nil, fmt.Errorf("sub-flow failed: %w", err)
+    }
+    
+    // Get results from the sub-flow
+    results, err := h.Runner.GetSharedData(subFlowID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get sub-flow results: %w", err)
+    }
+    
+    return results, nil
+}
+```
+
+### 7.4 Configuration Best Practices
 
 When setting up a PocketFlow application, consider these best practices:
 
