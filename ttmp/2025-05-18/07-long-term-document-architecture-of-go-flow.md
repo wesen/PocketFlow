@@ -536,26 +536,21 @@ type GenericFlowWorker struct {
     Publisher    EventPublisher
     StateStore   StateStore
     Registry     FlowRegistry
-    Orchestrator *FlowOrchestrator
 }
 ```
 
 This worker manages the flow execution lifecycle by handling flow-related messages and node completion events. It's designed to be generic enough that most flow types don't need specialized workers.
 
-#### Flow Orchestrator
+#### Flow Orchestration
 
-The `FlowOrchestrator` is the central coordinator for flow execution:
+The system has been simplified by removing the `FlowOrchestrator` component. Its functionality is now handled by other components:
 
-```go
-// FlowOrchestrator coordinates flow execution
-type FlowOrchestrator struct {
-    Publisher  EventPublisher
-    StateStore StateStore
-    Registry   FlowRegistry
-}
-```
+- Flow registration is handled directly by the `FlowRegistry` through the `RegisterFlow` method
+- Node transitions are handled by the `Flow` interface through the `GetNextNode` method
+- Flow execution is initiated by directly publishing a `FlowStartRequestedMessage` to the appropriate flow topic
+- Flow execution management is handled by the `FlowWorker`
 
-The orchestrator provides high-level APIs for starting flows and handling flow-related events. It's the main entry point for applications that want to execute flows.
+This simplification removes an unnecessary abstraction layer, making the system more maintainable and easier to understand.
 
 #### Event Router
 
@@ -564,7 +559,6 @@ The message routing is handled by the `WatermillEventRouter`, which uses the Wat
 ```go
 // WatermillEventRouter uses Watermill for event routing
 type WatermillEventRouter struct {
-    FlowOrchestrator *FlowOrchestrator
     NodeWorkers      map[string]NodeWorker
     FlowWorkers      map[string]FlowWorker
     PubSub           *gochannel.GoChannel
@@ -866,8 +860,8 @@ When initializing the PocketFlow system, it's important to create and wire the c
 2. Create the flow registry
 3. Create the event router
 4. Create the publisher
-5. Create the flow orchestrator
-6. Update the router with the orchestrator
+5. Create the flow registry
+6. Set up the message router
 7. Create and register node workers
 8. Create and register flow workers
 9. Set up event handlers for flow completion and progress
@@ -884,9 +878,9 @@ The execution of a flow in PocketFlow follows a well-defined lifecycle, orchestr
 #### Flow Initialization Phase
 
 1. **Flow Start Request**:
-   - A client application calls `orchestrator.StartFlow(flowType, flowID, initialData)`
-   - The orchestrator generates a unique flow execution ID 
-   - The orchestrator publishes a `FlowStartRequestedMessage` to the `flow.{flowType}` topic
+   - A client application generates a unique flow execution ID (using UUID)
+- The client publishes a `FlowStartRequestedMessage` to the `flow.{flowType}` topic
+- The message includes the flow type, definition ID, and initial data
    - This message includes the flow type, definition ID, and any initial shared data
 
 2. **Flow Initialization**:
@@ -1431,10 +1425,6 @@ func main() {
     watermillRouter := event.NewWatermillEventRouter(nil)
     publisher := event.NewWatermillPublisher(watermillRouter.PubSub)
     
-    // Create the flow orchestrator
-    orchestrator := event.NewFlowOrchestrator(publisher, stateStore, flowRegistry)
-    watermillRouter.UpdateOrchestrator(orchestrator)
-    
     // Create and register node workers
     questionNode := event.NewQuestionNodeWorker(publisher, stateStore, "What is your question?")
     answerNode := event.NewAnswerNodeWorker(publisher, stateStore, mockLLM)
@@ -1453,7 +1443,7 @@ func main() {
         Build()
     
     // Register the flow with the registry
-    orchestrator.RegisterFlow(testFlow)
+    flowRegistry.RegisterFlow(testFlow.ID(), testFlow)
     
     // Create and register a flow worker
     qaFlowWorker := event.NewGenericFlowWorker(
@@ -1461,7 +1451,6 @@ func main() {
         publisher,
         stateStore,
         flowRegistry,
-        orchestrator,
     )
     watermillRouter.RegisterFlowWorker(qaFlowWorker)
     
@@ -1490,8 +1479,24 @@ func main() {
     initialData := map[string]interface{}{
         "started_at": time.Now().Format(time.RFC3339),
     }
-    executionID := orchestrator.StartFlow(testFlow.Type(), testFlow.ID(), initialData)
-    log.Info().Str("executionID", executionID).Msg("Flow started")
+    
+    // Generate a flow execution ID and start the flow
+    flowExecutionID := uuid.New().String()
+    publisher.Publish(
+        fmt.Sprintf("flow.%s", testFlow.Type()),
+        core.FlowStartRequestedMessage{
+            BaseMessage: core.BaseMessage{
+                MessageType:     core.MessageTypeFlowStartRequested,
+                FlowExecutionID: flowExecutionID,
+                Timestamp:       time.Now(),
+            },
+            FlowType:          testFlow.Type(),
+            FlowDefinitionID:  testFlow.ID(),
+            InitialSharedData: initialData,
+        },
+    )
+    
+    log.Info().Str("executionID", flowExecutionID).Msg("Flow started")
     
     // Wait for interruption signal
     sigCh := make(chan os.Signal, 1)
@@ -1566,7 +1571,7 @@ sequenceDiagram
 
 #### Client Initiates Flow
 
-The flow begins when a client application calls `orchestrator.StartFlow()`, which generates a `FlowStartRequestedMessage` published to the flow's specific topic. This message includes:
+The flow begins when a client application generates a flow execution ID and directly publishes a `FlowStartRequestedMessage` to the flow's specific topic. This message includes:
 
 1. The flow type (e.g., "qa_chain")
 2. The flow definition ID
@@ -1935,8 +1940,7 @@ qaFlowWorker := NewGenericFlowWorker(
     qaFlow.Type(),
     publisher,
     stateStore,
-    flowRegistry,
-    orchestrator,
+    flowRegistry
 )
 watermillRouter.RegisterFlowWorker(qaFlowWorker)
 
@@ -1953,9 +1957,23 @@ go watermillRouter.Start(ctx)
 
 // Start the flow with initial data
 initialData := map[string]interface{}{
-    "started_at": time.Now().Format(time.RFC3339),
+"started_at": time.Now().Format(time.RFC3339),
 }
-executionID := orchestrator.StartFlow(qaFlow.Type(), flowID, initialData)
+// Generate flow execution ID and publish start request
+    executionID := uuid.New().String()
+    publisher.Publish(
+        fmt.Sprintf("flow.%s", qaFlow.Type()),
+        core.FlowStartRequestedMessage{
+            BaseMessage: core.BaseMessage{
+                MessageType:     core.MessageTypeFlowStartRequested,
+                FlowExecutionID: executionID,
+                Timestamp:       time.Now(),
+            },
+            FlowType:          qaFlow.Type(),
+            FlowDefinitionID:  flowID,
+            InitialSharedData: initialData,
+        },
+    )
 log.Info().Str("executionID", executionID).Msg("QA Flow started")
 ```
 

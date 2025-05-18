@@ -53,14 +53,9 @@ func main() {
 	publisher := event.NewWatermillPublisher(watermillRouter.PubSub)
 	log.Info().Msg("Event router and publisher initialized")
 
-	// Create the flow orchestrator
-	log.Debug().Msg("Creating flow orchestrator")
-	orchestrator := impl.NewFlowOrchestrator(publisher, stateStore, flowRegistry)
-	log.Info().Msg("Flow orchestrator created")
-
-	// Update the router with the orchestrator
-	log.Debug().Msg("Adding orchestrator to router")
-	watermillRouter.UpdateOrchestrator(orchestrator)
+	// No need for flow orchestrator anymore
+	log.Debug().Msg("Using direct flow control")
+	log.Info().Msg("Flow control initialized")
 
 	// Create and prepare the requested flow
 	var flow core.Flow
@@ -69,7 +64,7 @@ func main() {
 	switch *flowType {
 	case "basic":
 		flowName = "Basic QA Flow"
-		flow = setupBasicFlow(orchestrator, publisher, stateStore, flowRegistry, watermillRouter)
+		flow = setupBasicFlow(publisher, stateStore, flowRegistry, watermillRouter)
 
 	case "qa":
 		flowName = "Question-Answering Flow"
@@ -170,9 +165,21 @@ func main() {
 		"started_at": time.Now().Format(time.RFC3339),
 	}
 
-	// Start the flow using the orchestrator
+	// Start the flow by publishing a start request
 	log.Info().Msg("Starting flow")
-	orchestrator.StartFlow(flow.Type(), flow.ID(), initialData)
+	publisher.Publish(
+		fmt.Sprintf("flow.%s", flow.Type()),
+		core.FlowStartRequestedMessage{
+			BaseMessage: core.BaseMessage{
+				MessageType:     core.MessageTypeFlowStartRequested,
+				FlowExecutionID: flowExecutionID,
+				Timestamp:       time.Now(),
+			},
+			FlowType:          flow.Type(),
+			FlowDefinitionID:  flow.ID(),
+			InitialSharedData: initialData,
+		},
+	)
 
 	// Wait for either flow completion or interruption
 	log.Info().Msg("Waiting for flow completion or interruption")
@@ -195,7 +202,6 @@ func main() {
 }
 
 func setupBasicFlow(
-	orchestrator *impl.FlowOrchestrator,
 	publisher core.EventPublisher,
 	stateStore core.StateStore,
 	flowRegistry core.FlowRegistry,
@@ -238,7 +244,7 @@ func setupBasicFlow(
 
 	// Register the flow with the registry
 	log.Debug().Str("flowID", testFlow.ID()).Msg("Registering flow with registry")
-	orchestrator.RegisterFlow(testFlow)
+	flowRegistry.RegisterFlow(testFlow.ID(), testFlow)
 	log.Info().Str("flowID", testFlow.ID()).Msg("Flow registered successfully")
 
 	// Create a flow worker for the test flow
@@ -248,7 +254,6 @@ func setupBasicFlow(
 		publisher,
 		stateStore,
 		flowRegistry,
-		orchestrator,
 	)
 	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker created")
 

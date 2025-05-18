@@ -17,7 +17,6 @@ type GenericFlowWorker struct {
 	Publisher    core.EventPublisher
 	StateStore   core.StateStore
 	Registry     core.FlowRegistry
-	Orchestrator *FlowOrchestrator
 }
 
 func NewGenericFlowWorker(
@@ -25,14 +24,12 @@ func NewGenericFlowWorker(
 	publisher core.EventPublisher,
 	stateStore core.StateStore,
 	registry core.FlowRegistry,
-	orchestrator *FlowOrchestrator,
 ) *GenericFlowWorker {
 	return &GenericFlowWorker{
 		FlowTypeName: flowType,
 		Publisher:    publisher,
 		StateStore:   stateStore,
 		Registry:     registry,
-		Orchestrator: orchestrator,
 	}
 }
 

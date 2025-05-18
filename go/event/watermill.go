@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
@@ -15,7 +14,6 @@ import (
 
 // WatermillEventRouter uses Watermill for event routing
 type WatermillEventRouter struct {
-	FlowOrchestrator *impl.FlowOrchestrator
 	NodeWorkers      map[string]core.NodeWorker
 	FlowWorkers      map[string]core.FlowWorker
 	PubSub           *gochannel.GoChannel
@@ -73,10 +71,7 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 	}
 }
 
-// UpdateOrchestrator updates the router with an orchestrator
-func (r *WatermillEventRouter) UpdateOrchestrator(orchestrator *impl.FlowOrchestrator) {
-	r.FlowOrchestrator = orchestrator
-}
+// No longer need the UpdateOrchestrator method since we removed the orchestrator
 
 // Start starts the router
 func (r *WatermillEventRouter) Start(ctx context.Context) error {
