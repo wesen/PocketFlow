@@ -98,18 +98,6 @@ func (r *WatermillEventRouter) setupNodeWorkerHandlers(worker NodeWorker) {
 			return worker.HandleMessage(msg)
 		},
 	)
-
-	// For backward compatibility, add handlers for the old-style topics
-	for _, msgType := range worker.SupportedMessageTypes() {
-		r.Router.AddNoPublisherHandler(
-			fmt.Sprintf("node.%s.%s.handler", nodeType, msgType),
-			fmt.Sprintf("node.%s.%s", nodeType, msgType),
-			r.PubSub,
-			func(msg *message.Message) error {
-				return worker.HandleMessage(msg)
-			},
-		)
-	}
 }
 
 // setupFlowWorkerHandlers sets up handlers for a flow worker

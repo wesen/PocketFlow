@@ -1,8 +1,11 @@
 package event
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/ThreeDotsLabs/watermill/message"
 )
 
 // QuestionNodeWorker handles user interaction
@@ -32,8 +35,66 @@ func (w *QuestionNodeWorker) SupportedMessageTypes() []string {
 
 // HandleMessage handles the incoming messages
 func (w *QuestionNodeWorker) HandleMessage(msgObj interface{}) error {
-	// Implementation needed for new message pattern
-	return fmt.Errorf("not implemented")
+	// Extract the message from the message object
+	msg, ok := msgObj.(*message.Message)
+	if !ok {
+		return fmt.Errorf("expected *message.Message but got %T", msgObj)
+	}
+
+	// Extract base message to determine type
+	var base BaseMessage
+	if err := json.Unmarshal(msg.Payload, &base); err != nil {
+		return fmt.Errorf("failed to unmarshal base message: %v", err)
+	}
+
+	// Log incoming message
+	fmt.Printf("Question node received message: %s\n", base.MessageType)
+
+	switch base.MessageType {
+	case MessageTypeExecRequested:
+		var execReq ExecRequestedMessage
+		if err := json.Unmarshal(msg.Payload, &execReq); err != nil {
+			return fmt.Errorf("failed to unmarshal exec request: %v", err)
+		}
+
+		// Get question from params or use default
+		question := "What would you like to know about PocketFlow?"
+		if val, ok := execReq.Params["question"]; ok {
+			if q, ok := val.(string); ok && q != "" {
+				question = q
+			}
+		}
+
+		// Simulate processing delay (1 second) 
+		fmt.Printf("Question node asking: %s\n", question)
+		time.Sleep(1 * time.Second)
+
+		// Simulate user response
+		userAnswer := "How does PocketFlow work?"
+		fmt.Printf("User answered: %s\n", userAnswer)
+
+		// Store in shared data
+		if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "user_answer", userAnswer); err != nil {
+			return fmt.Errorf("failed to update shared data: %v", err)
+		}
+
+		// Publish completion
+		return w.Publisher.Publish("node.completed", NodeCompletedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeNodeCompleted,
+				FlowExecutionID: execReq.FlowExecutionID,
+				NodeExecutionID: execReq.NodeExecutionID,
+				Timestamp:       time.Now(),
+			},
+			NodeType: "question",
+			NodeID:   execReq.NodeID,
+			Action:   "default",
+			Result:   userAnswer,
+		})
+
+	default:
+		return fmt.Errorf("unsupported message type: %s", base.MessageType)
+	}
 }
 
 // Handle prep request

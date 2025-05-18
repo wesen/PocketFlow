@@ -1,8 +1,11 @@
 package event
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/ThreeDotsLabs/watermill/message"
 )
 
 // AnswerNodeWorker handles the answer node logic
@@ -32,10 +35,78 @@ func (w *AnswerNodeWorker) SupportedMessageTypes() []string {
 
 // HandleMessage handles the incoming messages
 func (w *AnswerNodeWorker) HandleMessage(msgObj interface{}) error {
-	// Implementation needed for new message pattern
-	// This would extract the BaseMessage, check the message type,
-	// and call the appropriate handler
-	return fmt.Errorf("not implemented")
+	// Extract the message from the message object
+	msg, ok := msgObj.(*message.Message)
+	if !ok {
+		return fmt.Errorf("expected *message.Message but got %T", msgObj)
+	}
+
+	// Extract base message to determine type
+	var base BaseMessage
+	if err := json.Unmarshal(msg.Payload, &base); err != nil {
+		return fmt.Errorf("failed to unmarshal base message: %v", err)
+	}
+
+	// Log incoming message
+	fmt.Printf("Answer node received message: %s\n", base.MessageType)
+
+	switch base.MessageType {
+	case MessageTypeExecRequested:
+		var execReq ExecRequestedMessage
+		if err := json.Unmarshal(msg.Payload, &execReq); err != nil {
+			return fmt.Errorf("failed to unmarshal exec request: %v", err)
+		}
+
+		// Simulate processing delay (1 second)
+		fmt.Printf("Answer node generating response...\n")
+		time.Sleep(1 * time.Second)
+
+		// Generate simulated LLM response
+		response := generateMockLLMResponse(execReq)
+
+		// Store result in shared data
+		if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "llm_response", response); err != nil {
+			return fmt.Errorf("failed to update shared data: %v", err)
+		}
+
+		// Publish completion
+		return w.Publisher.Publish("node.completed", NodeCompletedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeNodeCompleted,
+				FlowExecutionID: execReq.FlowExecutionID,
+				NodeExecutionID: execReq.NodeExecutionID,
+				Timestamp:       time.Now(),
+			},
+			NodeType: "answer",
+			NodeID:   execReq.NodeID,
+			Action:   "default",
+			Result:   response,
+		})
+
+	default:
+		return fmt.Errorf("unsupported message type: %s", base.MessageType)
+	}
+}
+
+// generateMockLLMResponse generates a mock LLM response based on request data
+func generateMockLLMResponse(req ExecRequestedMessage) string {
+	// Get question from shared data or use default
+	question := "How does PocketFlow work?"
+
+	// Generate response based on the question
+	responses := map[string]string{
+		"How does PocketFlow work?": "PocketFlow is an event-driven architecture for building LLM applications. It uses nodes for individual tasks and flows to connect them in a flexible way. Messages are passed through the system using a pub-sub pattern, enabling loose coupling and scalability.",
+		"What are nodes in PocketFlow?": "In PocketFlow, nodes represent individual processing units that perform specific tasks like asking questions, calling LLMs, or retrieving data. Each node has a unique identity, a specific type, and optional parameters.",
+		"What are flows in PocketFlow?": "Flows in PocketFlow are connected graphs of nodes with defined transitions between them. They define the possible paths through a workflow and determine which node to execute next based on the action returned by the current node.",
+	}
+
+	// Return matching response or default
+	if response, ok := responses[question]; ok {
+		return response
+	}
+
+	// Default response
+	return "PocketFlow is a powerful framework for building LLM-powered applications using a graph-based workflow approach."
 }
 
 // Handle prep request
