@@ -2,17 +2,29 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event"
+	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
+	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
+	"github.com/The-Pocket/PocketFlow/go/event/impl"
 	"github.com/The-Pocket/PocketFlow/go/logger"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
+	// Define command-line flags
+	flowType := flag.String("flow", "basic", "Flow type to run (basic, qa, branching)")
+	visualizeOnly := flag.Bool("visualize", false, "Only visualize the flow without running it")
+	flag.Parse()
+
 	// Initialize the logger
 	log := logger.Get()
 	log.Info().Msg("Initializing PocketFlow event-driven system")
@@ -23,7 +35,7 @@ func main() {
 
 	// Initialize the state store
 	log.Debug().Msg("Creating SQLite state store in memory")
-	stateStore, err := event.NewSQLiteStateStore(":memory:")
+	stateStore, err := impl.NewSQLiteStateStore(":memory:")
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create state store")
 		os.Exit(1)
@@ -32,7 +44,7 @@ func main() {
 
 	// Create a flow registry
 	log.Debug().Msg("Creating in-memory flow registry")
-	flowRegistry := event.NewInMemoryFlowRegistry()
+	flowRegistry := impl.NewInMemoryFlowRegistry()
 	log.Info().Msg("Flow registry created")
 
 	// Set up the router
@@ -43,64 +55,43 @@ func main() {
 
 	// Create the flow orchestrator
 	log.Debug().Msg("Creating flow orchestrator")
-	orchestrator := event.NewFlowOrchestrator(publisher, stateStore, flowRegistry)
+	orchestrator := impl.NewFlowOrchestrator(publisher, stateStore, flowRegistry)
 	log.Info().Msg("Flow orchestrator created")
 
 	// Update the router with the orchestrator
 	log.Debug().Msg("Adding orchestrator to router")
 	watermillRouter.UpdateOrchestrator(orchestrator)
 
-	// Set up mock LLM client
-	log.Debug().Msg("Creating mock LLM client")
-	mockLLM := event.NewMockLLMClient()
-	mockLLM.AddResponse("Given the user's response", "This is a detailed explanation from the LLM based on your input.")
-	log.Info().Msg("Mock LLM client initialized with predefined responses")
+	// Create and prepare the requested flow
+	var flow core.Flow
+	var flowName string
 
-	// Create the node workers
-	log.Debug().Msg("Creating node workers")
-	questionNode := event.NewQuestionNodeWorker(publisher, stateStore, "What is your question?")
-	answerNode := event.NewAnswerNodeWorker(publisher, stateStore, mockLLM)
-	log.Info().Msg("Node workers created")
+	switch *flowType {
+	case "basic":
+		flowName = "Basic QA Flow"
+		flow = setupBasicFlow(orchestrator, publisher, stateStore, flowRegistry, watermillRouter)
+		
+	case "qa":
+		flowName = "Question-Answering Flow"
+		flow = qa.CreateQAFlow()
+		// TODO: Register with the registry and set up workers
+	
+	case "branching":
+		flowName = "Branching Intent Flow"
+		flow = branching.CreateBranchingFlow()
+		// TODO: Register with the registry and set up workers
+		
+	default:
+		log.Fatal().Str("flowType", *flowType).Msg("Unknown flow type")
+		os.Exit(1)
+	}
 
-	// Register the nodes with the router
-	log.Debug().Msg("Registering node workers with router")
-	watermillRouter.RegisterAllNodeWorkers(questionNode, answerNode)
-	log.Info().Str("nodes", "question,answer").Msg("Node workers registered")
-
-	// Define nodes for our test flow using the builder pattern
-	log.Debug().Msg("Creating nodes for test flow")
-	questionNodeDef := event.NewNode("question", map[string]interface{}{
-		"question": "What would you like to know about?",
-	})
-	answerNodeDef := event.NewNode("answer", map[string]interface{}{})
-
-	// Define our test flow using the builder pattern
-	log.Debug().Msg("Defining test flow with builder pattern")
-	testFlow := event.NewFlowBuilder().
-		Begin(questionNodeDef).
-		Then(answerNodeDef).
-		Build()
-
-	// Register the flow with the registry
-	log.Debug().Str("flowID", testFlow.ID()).Msg("Registering flow with registry")
-	orchestrator.RegisterFlow(testFlow)
-	log.Info().Str("flowID", testFlow.ID()).Msg("Flow registered successfully")
-
-	// Create a flow worker for the test flow
-	log.Debug().Msg("Creating flow worker for test flow")
-	qaFlowWorker := event.NewGenericFlowWorker(
-		testFlow.Type(),
-		publisher,
-		stateStore,
-		flowRegistry,
-		orchestrator,
-	)
-	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker created")
-
-	// Register the flow worker with the router
-	log.Debug().Msg("Registering flow worker with router")
-	watermillRouter.RegisterFlowWorker(qaFlowWorker)
-	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker registered")
+	// If we only want to visualize, print the diagram and exit
+	if *visualizeOnly {
+		diagram := flow.Visualize()
+		fmt.Printf("\n%s Flow Visualization:\n\n%s\n", flowName, diagram)
+		return
+	}
 
 	// Set up a channel to capture flow completed events
 	log.Debug().Msg("Setting up flow completion channel")
@@ -120,9 +111,9 @@ func main() {
 		}
 
 		log.Info().Msg("📋 Flow results:")
-		log.Info().Interface("question", sharedData["question"]).Msg("Question")
-		log.Info().Interface("user_answer", sharedData["user_answer"]).Msg("User answer")
-		log.Info().Interface("llm_response", sharedData["llm_response"]).Msg("LLM response")
+		for key, value := range sharedData {
+			log.Info().Interface(key, value).Msg("Data")
+		}
 
 		// Signal flow completion
 		log.Debug().Msg("Signaling flow completion")
@@ -170,7 +161,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	log.Info().Msg("Signal handlers registered")
 
-	log.Info().Msg("🚀 Starting PocketFlow Go example...")
+	log.Info().Str("flowName", flowName).Msg("🚀 Starting PocketFlow Go example...")
 	log.Info().Str("flowExecutionID", flowExecutionID).Msg("Ready to execute flow")
 
 	// Prepare initial shared data
@@ -181,7 +172,7 @@ func main() {
 
 	// Start the flow using the orchestrator
 	log.Info().Msg("Starting flow")
-	orchestrator.StartFlow(testFlow.Type(), testFlow.ID(), initialData)
+	orchestrator.StartFlow(flow.Type(), flow.ID(), initialData)
 
 	// Wait for either flow completion or interruption
 	log.Info().Msg("Waiting for flow completion or interruption")
@@ -201,4 +192,70 @@ func main() {
 		log.Error().Err(err).Msg("Error stopping router")
 	}
 	log.Info().Msg("PocketFlow execution completed")
+}
+
+func setupBasicFlow(
+	orchestrator *impl.FlowOrchestrator,
+	publisher core.EventPublisher,
+	stateStore core.StateStore,
+	flowRegistry core.FlowRegistry,
+	router interface {
+		RegisterNodeWorker(worker core.NodeWorker)
+		RegisterFlowWorker(worker core.FlowWorker)
+		RegisterAllNodeWorkers(workers ...core.NodeWorker)
+	},
+) core.Flow {
+	// Set up mock LLM client
+	log.Debug().Msg("Creating mock LLM client")
+	mockLLM := event.NewMockLLMClient()
+	mockLLM.AddResponse("Given the user's response", "This is a detailed explanation from the LLM based on your input.")
+	log.Info().Msg("Mock LLM client initialized with predefined responses")
+
+	// Create the node workers
+	log.Debug().Msg("Creating node workers")
+	questionNode := event.NewQuestionNodeWorker(publisher, stateStore, "What is your question?")
+	answerNode := event.NewAnswerNodeWorker(publisher, stateStore, mockLLM)
+	log.Info().Msg("Node workers created")
+
+	// Register the nodes with the router
+	log.Debug().Msg("Registering node workers with router")
+	router.RegisterAllNodeWorkers(questionNode, answerNode)
+	log.Info().Str("nodes", "question,answer").Msg("Node workers registered")
+
+	// Define nodes for our test flow using the builder pattern
+	log.Debug().Msg("Creating nodes for test flow")
+	questionNodeDef := impl.NewNode("question", map[string]interface{}{
+		"question": "What would you like to know about?",
+	})
+	answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
+
+	// Define our test flow using the builder pattern
+	log.Debug().Msg("Defining test flow with builder pattern")
+	testFlow := impl.NewFlowBuilder().
+		Begin(questionNodeDef).
+		Then(answerNodeDef).
+		Build()
+
+	// Register the flow with the registry
+	log.Debug().Str("flowID", testFlow.ID()).Msg("Registering flow with registry")
+	orchestrator.RegisterFlow(testFlow)
+	log.Info().Str("flowID", testFlow.ID()).Msg("Flow registered successfully")
+
+	// Create a flow worker for the test flow
+	log.Debug().Msg("Creating flow worker for test flow")
+	qaFlowWorker := impl.NewGenericFlowWorker(
+		testFlow.Type(),
+		publisher,
+		stateStore,
+		flowRegistry,
+		orchestrator,
+	)
+	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker created")
+
+	// Register the flow worker with the router
+	log.Debug().Msg("Registering flow worker with router")
+	router.RegisterFlowWorker(qaFlowWorker)
+	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker registered")
+	
+	return testFlow
 }

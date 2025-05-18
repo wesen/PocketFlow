@@ -1,0 +1,188 @@
+// Package qa provides a simple question-answering flow example
+package qa
+
+import (
+	"fmt"
+
+	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/rs/zerolog/log"
+)
+
+// QuestionHandler implements SimpleNodeHandler for user interaction
+type QuestionHandler struct{}
+
+// Prep handles the preparation phase
+func (h *QuestionHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+	// Get question prompt from params or use default
+	prompt := "What would you like to know about?"
+	if val, ok := ctx.Params["prompt"]; ok {
+		if promptStr, ok := val.(string); ok && promptStr != "" {
+			prompt = promptStr
+		}
+	}
+	return prompt, nil
+}
+
+// Exec handles the actual processing
+func (h *QuestionHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+	// In a real implementation, this would prompt the user for input
+	// For this example, we'll simulate user input
+	prompt := prepResult.(string)
+	log.Info().Str("prompt", prompt).Msg("Asking user question")
+	
+	// Simulate user response
+	userAnswer := "How does PocketFlow work?"
+	return userAnswer, nil
+}
+
+// Post handles the post-processing and determines next action
+func (h *QuestionHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+	userAnswer := execResult.(string)
+	return "default", userAnswer, nil
+}
+
+// LLMInterface defines a simple interface for LLM clients
+type LLMInterface interface {
+	Generate(prompt string) (string, error)
+}
+
+// MockLLMClient implements LLMInterface for testing
+type MockLLMClient struct{
+	responses map[string]string
+}
+
+// NewMockLLMClient creates a new mock LLM client
+func NewMockLLMClient() *MockLLMClient {
+	return &MockLLMClient{
+		responses: make(map[string]string),
+	}
+}
+
+// AddResponse adds a mock response for a specific prompt
+func (m *MockLLMClient) AddResponse(promptPart string, response string) {
+	m.responses[promptPart] = response
+}
+
+// Generate generates a response for a prompt
+func (m *MockLLMClient) Generate(prompt string) (string, error) {
+	// Look for any matching part in the prompt
+	for part, response := range m.responses {
+		if part == "" || part == "*" { // Default fallback
+			return response, nil
+		}
+		if prompt == part { // Exact match
+			return response, nil
+		}
+	}
+	
+	// Default response
+	return "I don't know how to respond to that.", nil
+}
+
+// AnswerHandler implements SimpleNodeHandler for LLM responses
+type AnswerHandler struct {
+	llm LLMInterface
+}
+
+// NewAnswerHandler creates a new AnswerHandler
+func NewAnswerHandler(llm LLMInterface) *AnswerHandler {
+	return &AnswerHandler{llm: llm}
+}
+
+// Prep handles the preparation phase
+func (h *AnswerHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+	// Get the user's question from shared data
+	userQuestion, ok := ctx.SharedData["question"].(string)
+	if !ok {
+		return nil, fmt.Errorf("user question not found in shared data")
+	}
+	return userQuestion, nil
+}
+
+// Exec handles the actual processing
+func (h *AnswerHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+	userQuestion := prepResult.(string)
+	
+	// Construct prompt
+	prompt := fmt.Sprintf("Given the user's question: %s\nProvide a detailed explanation.", userQuestion)
+	
+	// Call LLM
+	log.Info().Str("prompt", prompt).Msg("Calling LLM")
+	
+	llmResponse, err := h.llm.Generate(prompt)
+	if err != nil {
+		return nil, fmt.Errorf("LLM generation failed: %w", err)
+	}
+	
+	return llmResponse, nil
+}
+
+// Post handles the post-processing and determines next action
+func (h *AnswerHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+	llmResponse := execResult.(string)
+	return "default", llmResponse, nil
+}
+
+// CreateQAFlow creates a simple question-answering flow
+func CreateQAFlow() core.Flow {
+	// Define node definitions
+	questionNodeDef := impl.NewNode("question", map[string]interface{}{
+		"prompt": "What would you like to know about?",
+	})
+	answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
+
+	// Define flow using builder pattern
+	qaFlow := impl.NewFlowBuilder().
+		Begin(questionNodeDef).
+		Then(answerNodeDef).
+		Build()
+	
+	return qaFlow
+}
+
+// RegisterQAFlow registers the QA flow and its node workers
+func RegisterQAFlow(
+	orchestrator interface{},
+	publisher core.EventPublisher,
+	stateStore core.StateStore,
+	flowRegistry core.FlowRegistry,
+	router interface{
+		RegisterNodeWorker(worker core.NodeWorker)
+		RegisterFlowWorker(worker core.FlowWorker)
+	},
+) {
+	// Create the flow
+	flow := CreateQAFlow()
+	
+	// Register the flow
+	flowRegistry.RegisterFlow(flow.ID(), flow)
+	
+	// Create the llm client
+	mockLLM := NewMockLLMClient()
+	mockLLM.AddResponse("*", "PocketFlow is an event-driven framework for building LLM applications using a graph-based workflow approach.")
+	
+	// Create nodes from handlers
+	questionHandler := &QuestionHandler{}
+	answerHandler := NewAnswerHandler(mockLLM)
+	
+	// Create SimpleNode wrappers
+	questionNode := impl.NewSimpleNode("question", questionHandler, publisher, stateStore)
+	answerNode := impl.NewSimpleNode("answer", answerHandler, publisher, stateStore)
+	
+	// Register node workers
+	router.RegisterNodeWorker(questionNode)
+	router.RegisterNodeWorker(answerNode)
+	
+	// Create a generic flow worker
+	flowWorker := impl.NewGenericFlowWorker(
+		flow.Type(),
+		publisher,
+		stateStore,
+		flowRegistry,
+		nil, // Add orchestrator if needed
+	)
+	
+	// Register flow worker
+	router.RegisterFlowWorker(flowWorker)
+}
