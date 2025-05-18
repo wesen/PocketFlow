@@ -74,3 +74,6 @@ htmlcov/
 
 test.ipynb
 .pytest_cache/
+
+__debug_*
+.history
