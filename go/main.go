@@ -70,17 +70,17 @@ func main() {
 	case "basic":
 		flowName = "Basic QA Flow"
 		flow = setupBasicFlow(orchestrator, publisher, stateStore, flowRegistry, watermillRouter)
-		
+
 	case "qa":
 		flowName = "Question-Answering Flow"
 		flow = qa.CreateQAFlow()
 		// TODO: Register with the registry and set up workers
-	
+
 	case "branching":
 		flowName = "Branching Intent Flow"
 		flow = branching.CreateBranchingFlow()
 		// TODO: Register with the registry and set up workers
-		
+
 	default:
 		log.Fatal().Str("flowType", *flowType).Msg("Unknown flow type")
 		os.Exit(1)
@@ -231,7 +231,7 @@ func setupBasicFlow(
 
 	// Define our test flow using the builder pattern
 	log.Debug().Msg("Defining test flow with builder pattern")
-	testFlow := impl.NewFlowBuilder().
+	testFlow := impl.NewFlowBuilder("basic").
 		Begin(questionNodeDef).
 		Then(answerNodeDef).
 		Build()
@@ -256,6 +256,6 @@ func setupBasicFlow(
 	log.Debug().Msg("Registering flow worker with router")
 	router.RegisterFlowWorker(qaFlowWorker)
 	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker registered")
-	
+
 	return testFlow
 }

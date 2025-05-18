@@ -39,30 +39,30 @@ func NewWatermillEventRouter(orchestrator *FlowOrchestrator) *WatermillEventRout
 
 	// We'll register middleware handlers here
 	// Add poison queue middleware to prevent infinite retries
-	router.AddMiddleware(PoisonQueueMiddleware(3))
+	// router.AddMiddleware(PoisonQueueMiddleware(3))
 
 	// Add recovery middleware to catch panics
-	router.AddMiddleware(RecoveryMiddleware())
+	// router.AddMiddleware(RecoveryMiddleware())
 
 	// Add logging middleware for detailed logs
 	router.AddMiddleware(LoggingMiddleware())
 
 	// Add basic message tracking middleware
-	router.AddMiddleware(
-		func(h message.HandlerFunc) message.HandlerFunc {
-			return func(msg *message.Message) ([]*message.Message, error) {
-				// Extract base message for logging
-				var base BaseMessage
-				if err := json.Unmarshal(msg.Payload, &base); err == nil {
-					zerolog.Ctx(context.Background()).Debug().
-						Str("messageType", base.MessageType).
-						Str("flowExecutionID", base.FlowExecutionID).
-						Msg("Processing message")
-				}
-				return h(msg)
-			}
-		},
-	)
+	// router.AddMiddleware(
+	// 	func(h message.HandlerFunc) message.HandlerFunc {
+	// 		return func(msg *message.Message) ([]*message.Message, error) {
+	// 			// Extract base message for logging
+	// 			var base BaseMessage
+	// 			if err := json.Unmarshal(msg.Payload, &base); err == nil {
+	// 				zerolog.Ctx(context.Background()).Debug().
+	// 					Str("messageType", base.MessageType).
+	// 					Str("flowExecutionID", base.FlowExecutionID).
+	// 					Msg("Processing message")
+	// 			}
+	// 			return h(msg)
+	// 		}
+	// 	},
+	// )
 
 	return &WatermillEventRouter{
 		FlowOrchestrator: orchestrator,

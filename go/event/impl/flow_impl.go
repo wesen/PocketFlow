@@ -192,8 +192,8 @@ func (t *transitionBuilderImpl) Then(node core.Node) core.FlowBuilder {
 }
 
 // NewFlowBuilder creates a new FlowBuilder instance
-func NewFlowBuilder() core.FlowBuilder {
+func NewFlowBuilder(type_ string) core.FlowBuilder {
 	return &flowBuilderImpl{
-		flow: NewFlowDefinition("flow_" + uuid.New().String()[:8]),
+		flow: NewFlowDefinition(type_),
 	}
 }

@@ -72,6 +72,9 @@ func (w *GenericFlowWorker) HandleMessage(msgObj interface{}) error {
 		return w.handleFlowResumeRequested(msg)
 	case core.MessageTypeFlowCancelRequested:
 		return w.handleFlowCancelRequested(msg)
+	case core.MessageTypeFlowCompleted, core.MessageTypeFlowFailed:
+		// Ignore flow completion and failure messages since we probably emitted it
+		return nil
 	default:
 		return fmt.Errorf("unsupported message type: %s", base.MessageType)
 	}

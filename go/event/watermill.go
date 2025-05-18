@@ -40,9 +40,9 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	
+
 	msg := message.NewMessage(watermill.NewUUID(), payload)
-	
+
 	return p.pubSub.Publish(topic, msg)
 }
 
@@ -51,19 +51,19 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 	if logger == nil {
 		logger = watermill.NewStdLogger(false, false)
 	}
-	
+
 	pubSub := gochannel.NewGoChannel(
 		gochannel.Config{
-			BlockPublishUntilSubscriberAck: true,
+			BlockPublishUntilSubscriberAck: false,
 		},
 		logger,
 	)
-	
+
 	router, err := message.NewRouter(message.RouterConfig{}, logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create router")
 	}
-	
+
 	return &WatermillEventRouter{
 		PubSub:      pubSub,
 		Router:      router,
@@ -92,7 +92,7 @@ func (r *WatermillEventRouter) Stop() error {
 func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 	nodeType := worker.NodeType()
 	r.NodeWorkers[nodeType] = worker
-	
+
 	// Subscribe to the node's topic
 	r.Router.AddHandler(
 		fmt.Sprintf("handle_%s_node", nodeType),
@@ -108,7 +108,7 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 			return nil, nil
 		},
 	)
-	
+
 	log.Info().Str("nodeType", nodeType).Msg("Registered node worker")
 }
 
@@ -123,7 +123,7 @@ func (r *WatermillEventRouter) RegisterAllNodeWorkers(workers ...core.NodeWorker
 func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	flowType := worker.FlowType()
 	r.FlowWorkers[flowType] = worker
-	
+
 	// Subscribe to the flow's topic
 	r.Router.AddHandler(
 		fmt.Sprintf("handle_%s_flow", flowType),
@@ -139,7 +139,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 			return nil, nil
 		},
 	)
-	
+
 	// Also subscribe the flow worker to node.completed events
 	r.Router.AddHandler(
 		fmt.Sprintf("handle_%s_node_completed", flowType),
@@ -155,7 +155,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 			return nil, nil
 		},
 	)
-	
+
 	log.Info().Str("flowType", flowType).Msg("Registered flow worker")
 }
 
@@ -172,7 +172,7 @@ func (r *WatermillEventRouter) SetupFlowCompletionHandler(handler func(core.Flow
 			if err := json.Unmarshal(msg.Payload, &completed); err != nil {
 				return nil, err
 			}
-			
+
 			if err := handler(completed); err != nil {
 				log.Error().Err(err).Msg("Error handling flow completion")
 				return nil, err
@@ -195,7 +195,7 @@ func (r *WatermillEventRouter) SetupFlowFailureHandler(handler func(core.FlowFai
 			if err := json.Unmarshal(msg.Payload, &failed); err != nil {
 				return nil, err
 			}
-			
+
 			if err := handler(failed); err != nil {
 				log.Error().Err(err).Msg("Error handling flow failure")
 				return nil, err
@@ -218,7 +218,7 @@ func (r *WatermillEventRouter) SetupProgressHandler(handler func(core.ProgressUp
 			if err := json.Unmarshal(msg.Payload, &progress); err != nil {
 				return nil, err
 			}
-			
+
 			if err := handler(progress); err != nil {
 				log.Error().Err(err).Msg("Error handling progress update")
 				return nil, err

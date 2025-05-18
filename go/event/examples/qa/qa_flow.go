@@ -133,56 +133,10 @@ func CreateQAFlow() core.Flow {
 	answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
 
 	// Define flow using builder pattern
-	qaFlow := impl.NewFlowBuilder().
+	qaFlow := impl.NewFlowBuilder("qa_chain").
 		Begin(questionNodeDef).
 		Then(answerNodeDef).
 		Build()
 	
 	return qaFlow
-}
-
-// RegisterQAFlow registers the QA flow and its node workers
-func RegisterQAFlow(
-	orchestrator interface{},
-	publisher core.EventPublisher,
-	stateStore core.StateStore,
-	flowRegistry core.FlowRegistry,
-	router interface{
-		RegisterNodeWorker(worker core.NodeWorker)
-		RegisterFlowWorker(worker core.FlowWorker)
-	},
-) {
-	// Create the flow
-	flow := CreateQAFlow()
-	
-	// Register the flow
-	flowRegistry.RegisterFlow(flow.ID(), flow)
-	
-	// Create the llm client
-	mockLLM := NewMockLLMClient()
-	mockLLM.AddResponse("*", "PocketFlow is an event-driven framework for building LLM applications using a graph-based workflow approach.")
-	
-	// Create nodes from handlers
-	questionHandler := &QuestionHandler{}
-	answerHandler := NewAnswerHandler(mockLLM)
-	
-	// Create SimpleNode wrappers
-	questionNode := impl.NewSimpleNode("question", questionHandler, publisher, stateStore)
-	answerNode := impl.NewSimpleNode("answer", answerHandler, publisher, stateStore)
-	
-	// Register node workers
-	router.RegisterNodeWorker(questionNode)
-	router.RegisterNodeWorker(answerNode)
-	
-	// Create a generic flow worker
-	flowWorker := impl.NewGenericFlowWorker(
-		flow.Type(),
-		publisher,
-		stateStore,
-		flowRegistry,
-		nil, // Add orchestrator if needed
-	)
-	
-	// Register flow worker
-	router.RegisterFlowWorker(flowWorker)
 }

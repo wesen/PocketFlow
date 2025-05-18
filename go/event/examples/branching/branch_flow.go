@@ -29,11 +29,11 @@ func (h *IntentClassifierHandler) Prep(ctx core.NodeContext) (interface{}, error
 // Exec handles the actual processing
 func (h *IntentClassifierHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
 	userQuestion := prepResult.(string)
-	
+
 	// Simple rule-based classifier
 	// In a real implementation, this would use an LLM or ML model
 	question := strings.ToLower(userQuestion)
-	
+
 	if strings.Contains(question, "weather") {
 		return "weather_intent", nil
 	} else if strings.Contains(question, "time") {
@@ -41,7 +41,7 @@ func (h *IntentClassifierHandler) Exec(ctx core.NodeContext, prepResult interfac
 	} else if strings.Contains(question, "help") {
 		return "help_intent", nil
 	}
-	
+
 	return "general_intent", nil
 }
 
@@ -61,7 +61,7 @@ func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 	if !ok {
 		return nil, fmt.Errorf("user input not found in shared data")
 	}
-	
+
 	// Extract location from query (simplified)
 	location := "default_location"
 	if strings.Contains(strings.ToLower(userQuery), "weather in") {
@@ -70,30 +70,30 @@ func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 			location = strings.TrimSpace(parts[1])
 		}
 	}
-	
+
 	return location, nil
 }
 
 // Exec handles the actual processing
 func (h *WeatherHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
 	location := prepResult.(string)
-	
+
 	// In a real implementation, call an actual weather API
 	// For this example, we'll return mock data
 	weatherData := map[string]interface{}{
-		"location": location,
+		"location":    location,
 		"temperature": 72,
-		"condition": "sunny",
-		"humidity": 45,
+		"condition":   "sunny",
+		"humidity":    45,
 	}
-	
+
 	return weatherData, nil
 }
 
 // Post handles the post-processing and determines next action
 func (h *WeatherHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	weatherData := execResult.(map[string]interface{})
-	
+
 	// Form a readable response
 	response := fmt.Sprintf(
 		"The weather in %s is %s with a temperature of %d°F and humidity of %d%%.",
@@ -102,7 +102,7 @@ func (h *WeatherHandler) Post(ctx core.NodeContext, prepResult, execResult inter
 		weatherData["temperature"],
 		weatherData["humidity"],
 	)
-	
+
 	return "default", response, nil
 }
 
@@ -159,21 +159,21 @@ func (h *GeneralHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 	if !ok {
 		return nil, fmt.Errorf("user input not found in shared data")
 	}
-	
+
 	return userQuery, nil
 }
 
 // Exec handles the actual processing
 func (h *GeneralHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
 	userQuery := prepResult.(string)
-	
+
 	// In a real implementation, call an LLM
 	// For this example, we'll return a fixed response
 	response := fmt.Sprintf(
 		"I received your query: '%s'. I would normally provide a detailed response using an LLM.",
 		userQuery,
 	)
-	
+
 	return response, nil
 }
 
@@ -196,7 +196,7 @@ func CreateBranchingFlow() core.Flow {
 	generalNode := impl.NewNode("general", map[string]interface{}{})
 
 	// Define flow using builder pattern with branching
-	branchingFlow := impl.NewFlowBuilder().
+	branchingFlow := impl.NewFlowBuilder("branching").
 		Begin(inputNode).
 		Then(intentClassifierNode).
 		On("weather_intent").Then(weatherNode).
@@ -204,30 +204,6 @@ func CreateBranchingFlow() core.Flow {
 		On("help_intent").Then(helpNode).
 		On("general_intent").Then(generalNode).
 		Build()
-	
-	return branchingFlow
-}
 
-// RegisterBranchingFlow registers the branching flow and its node workers
-func RegisterBranchingFlow(
-	orchestrator interface{},
-	publisher core.EventPublisher,
-	stateStore core.StateStore,
-	flowRegistry core.FlowRegistry,
-	router interface{
-		RegisterNodeWorker(worker core.NodeWorker)
-		RegisterFlowWorker(worker core.FlowWorker)
-	},
-) {
-	// Create the flow
-	flow := CreateBranchingFlow()
-	
-	// Register the flow
-	flowRegistry.RegisterFlow(flow.ID(), flow)
-	
-	// Create nodes from handlers
-	// TODO: Create and register node workers
-	
-	// Create a generic flow worker
-	// TODO: Create and register flow worker
+	return branchingFlow
 }
