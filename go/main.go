@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/The-Pocket/PocketFlow/go/event"
 	"github.com/The-Pocket/PocketFlow/go/logger"
-	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 )
 
@@ -37,9 +35,9 @@ func main() {
 	flowRegistry := event.NewInMemoryFlowRegistry()
 	log.Info().Msg("Flow registry created")
 
-	// Set up the router without orchestrator initially
+	// Set up the router
 	log.Debug().Msg("Setting up event router")
-	watermillRouter := event.NewWatermillEventRouter(nil, nil)
+	watermillRouter := event.NewWatermillEventRouter(nil)
 	publisher := event.NewWatermillPublisher(watermillRouter.PubSub)
 	log.Info().Msg("Event router and publisher initialized")
 
@@ -66,117 +64,93 @@ func main() {
 
 	// Register the nodes with the router
 	log.Debug().Msg("Registering node workers with router")
-	nodeWorkers := map[string]event.NodeWorker{
-		"question": questionNode,
-		"answer":   answerNode,
-	}
+	watermillRouter.RegisterAllNodeWorkers(questionNode, answerNode)
 	log.Info().Str("nodes", "question,answer").Msg("Node workers registered")
 
-	// Set up handlers for node workers
-	log.Debug().Msg("Setting up handlers for node workers")
-	watermillRouter.SetupNodeWorkerHandlersWithWorkers(nodeWorkers)
-	log.Info().Msg("Node worker handlers registered with router")
+	// Define nodes for our test flow using the builder pattern
+	log.Debug().Msg("Creating nodes for test flow")
+	questionNodeDef := event.NewNode("question", map[string]interface{}{
+		"question": "What would you like to know about?",
+	})
+	answerNodeDef := event.NewNode("answer", map[string]interface{}{})
 
-	// Define our test flow
-	log.Debug().Msg("Defining test flow")
-	testFlow := &event.FlowDefinition{
-		ID:            "test-flow",
-		Name:          "Test Question-Answer Flow",
-		StartNodeType: "question",
-		StartNodeID:   "question-1",
-		StartNodeParams: map[string]interface{}{
-			"question": "What would you like to know about?",
-		},
-		Nodes: map[string]event.NodeDefinition{
-			"question-1": {
-				ID:     "question-1",
-				Type:   "question",
-				Params: map[string]interface{}{},
-			},
-			"answer-1": {
-				ID:     "answer-1",
-				Type:   "answer",
-				Params: map[string]interface{}{},
-			},
-		},
-		Transitions: map[string]map[string]event.TransitionDefinition{
-			"question": {
-				"default": {
-					Action:   "default",
-					ToNodeID: "answer-1",
-				},
-			},
-			"answer": {}, // No transitions from answer node (end of flow)
-		},
-	}
+	// Define our test flow using the builder pattern
+	log.Debug().Msg("Defining test flow with builder pattern")
+	testFlow := event.NewFlowBuilder().
+		Begin(questionNodeDef).
+		Then(answerNodeDef).
+		Build()
 
 	// Register the flow with the registry
-	log.Debug().Str("flowID", testFlow.ID).Msg("Registering flow with registry")
-	flowRegistry.RegisterFlow(testFlow.ID, testFlow)
-	log.Info().Str("flowID", testFlow.ID).Msg("Flow registered successfully")
+	log.Debug().Str("flowID", testFlow.ID()).Msg("Registering flow with registry")
+	orchestrator.RegisterFlow(testFlow)
+	log.Info().Str("flowID", testFlow.ID()).Msg("Flow registered successfully")
+
+	// Create a flow worker for the test flow
+	log.Debug().Msg("Creating flow worker for test flow")
+	qaFlowWorker := event.NewGenericFlowWorker(
+		testFlow.Type(),
+		publisher,
+		stateStore,
+		flowRegistry,
+		orchestrator,
+	)
+	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker created")
+
+	// Register the flow worker with the router
+	log.Debug().Msg("Registering flow worker with router")
+	watermillRouter.RegisterFlowWorker(qaFlowWorker)
+	log.Info().Str("flowType", testFlow.Type()).Msg("Flow worker registered")
 
 	// Set up a channel to capture flow completed events
 	log.Debug().Msg("Setting up flow completion channel")
 	flowCompletedCh := make(chan struct{})
 
-	// Add a special handler for flow.completed events
+	// Set up handler for flow.completed events
 	log.Debug().Msg("Setting up flow.completed event handler")
-	watermillRouter.Router.AddNoPublisherHandler(
-		"flow.completed.handler",
-		"flow.completed",
-		watermillRouter.PubSub,
-		func(msg *message.Message) error {
-			log.Info().Msg("🎉 Flow completed successfully!")
+	watermillRouter.SetupFlowCompletionHandler(func(completed event.FlowCompletedMessage) error {
+		log.Info().Msg("🎉 Flow completed successfully!")
 
-			// Extract the event from the message payload
-			var event event.FlowCompleted
-			err := json.Unmarshal(msg.Payload, &event)
-			if err != nil {
-				log.Error().Err(err).Msg("Error unmarshaling event")
-				return nil
-			}
-
-			log.Debug().Str("flowExecutionID", event.FlowExecutionID).Msg("Getting final results from shared data")
-			// Get the final results from shared data
-			sharedData, err := stateStore.GetSharedData(event.FlowExecutionID)
-			if err != nil {
-				log.Error().Err(err).Msg("Error getting final results")
-				return nil
-			}
-
-			log.Info().Msg("📋 Flow results:")
-			log.Info().Interface("question", sharedData["question"]).Msg("Question")
-			log.Info().Interface("user_answer", sharedData["user_answer"]).Msg("User answer")
-			log.Info().Interface("llm_response", sharedData["llm_response"]).Msg("LLM response")
-
-			// Signal flow completion
-			log.Debug().Msg("Signaling flow completion")
-			flowCompletedCh <- struct{}{}
+		log.Debug().Str("flowExecutionID", completed.FlowExecutionID).Msg("Getting final results from shared data")
+		// Get the final results from shared data
+		sharedData, err := stateStore.GetSharedData(completed.FlowExecutionID)
+		if err != nil {
+			log.Error().Err(err).Msg("Error getting final results")
 			return nil
-		},
-	)
+		}
 
-	// Add handler for flow.failed events
+		log.Info().Msg("📋 Flow results:")
+		log.Info().Interface("question", sharedData["question"]).Msg("Question")
+		log.Info().Interface("user_answer", sharedData["user_answer"]).Msg("User answer")
+		log.Info().Interface("llm_response", sharedData["llm_response"]).Msg("LLM response")
+
+		// Signal flow completion
+		log.Debug().Msg("Signaling flow completion")
+		flowCompletedCh <- struct{}{}
+		return nil
+	})
+
+	// Set up handler for flow.failed events
 	log.Debug().Msg("Setting up flow.failed event handler")
-	watermillRouter.Router.AddNoPublisherHandler(
-		"flow.failed.handler",
-		"flow.failed",
-		watermillRouter.PubSub,
-		func(msg *message.Message) error {
-			// Extract the event
-			var event event.FlowFailed
-			err := json.Unmarshal(msg.Payload, &event)
-			if err != nil {
-				log.Error().Err(err).Msg("Error unmarshaling flow failed event")
-			} else {
-				log.Error().Str("errorMessage", event.ErrorMessage).Str("errorDetails", event.ErrorDetails).Msg("❌ Flow failed!")
-			}
-			// Signal flow completion (with error)
-			log.Debug().Msg("Signaling flow completion (with error)")
-			flowCompletedCh <- struct{}{}
-			return nil
-		},
-	)
+	watermillRouter.SetupFlowFailureHandler(func(failed event.FlowFailedMessage) error {
+		log.Error().Str("errorMessage", failed.ErrorMessage).Str("errorDetails", failed.ErrorDetails).Msg("❌ Flow failed!")
+
+		// Signal flow completion (with error)
+		log.Debug().Msg("Signaling flow completion (with error)")
+		flowCompletedCh <- struct{}{}
+		return nil
+	})
+
+	// Set up handler for progress updates
+	log.Debug().Msg("Setting up progress event handler")
+	watermillRouter.SetupProgressHandler(func(progress event.ProgressUpdateMessage) error {
+		log.Info().
+			Str("status", progress.Status).
+			Float64("progress", progress.Progress).
+			Str("message", progress.Message).
+			Msg("📊 Progress update")
+		return nil
+	})
 
 	// Start the router in a goroutine
 	log.Debug().Msg("Creating context for router")
@@ -185,7 +159,7 @@ func main() {
 
 	log.Info().Msg("Starting router in background goroutine")
 	go func() {
-		if err := watermillRouter.Router.Run(ctx); err != nil {
+		if err := watermillRouter.Start(ctx); err != nil {
 			log.Fatal().Err(err).Msg("Router error")
 		}
 	}()
@@ -205,19 +179,9 @@ func main() {
 		"started_at": time.Now().Format(time.RFC3339),
 	}
 
-	// Start the flow by sending a flow start request event
-	log.Info().Msg("Publishing flow.start.requested event")
-	publisher.Publish("flow.start.requested", event.FlowStartRequested{
-		BaseEvent: event.BaseEvent{
-			EventID:         uuid.New().String(),
-			FlowExecutionID: flowExecutionID,
-			Timestamp:       time.Now(),
-			CorrelationID:   uuid.New().String(),
-		},
-		FlowDefinitionID:  testFlow.ID,
-		InitialSharedData: initialData,
-		FlowParams:        map[string]interface{}{},
-	})
+	// Start the flow using the orchestrator
+	log.Info().Msg("Starting flow")
+	orchestrator.StartFlow(testFlow.Type(), testFlow.ID(), initialData)
 
 	// Wait for either flow completion or interruption
 	log.Info().Msg("Waiting for flow completion or interruption")

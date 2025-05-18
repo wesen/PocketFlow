@@ -3,6 +3,7 @@ package event
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/The-Pocket/PocketFlow/go/logger"
 	"github.com/ThreeDotsLabs/watermill"
@@ -14,11 +15,13 @@ import (
 type WatermillEventRouter struct {
 	FlowOrchestrator *FlowOrchestrator
 	NodeWorkers      map[string]NodeWorker
+	FlowWorkers      map[string]FlowWorker
 	PubSub           *gochannel.GoChannel
 	Router           *message.Router
 }
 
-func NewWatermillEventRouter(orchestrator *FlowOrchestrator, workers map[string]NodeWorker) *WatermillEventRouter {
+// NewWatermillEventRouter creates a new event router
+func NewWatermillEventRouter(orchestrator *FlowOrchestrator) *WatermillEventRouter {
 	// Initialize watermill logger
 	logger := watermill.NewStdLogger(false, false)
 
@@ -34,154 +37,165 @@ func NewWatermillEventRouter(orchestrator *FlowOrchestrator, workers map[string]
 		panic(err)
 	}
 
-	// We'll register orchestrator-dependent handlers later if orchestrator is provided now
-	if orchestrator != nil {
-		setupOrchestratorHandlers(router, pubSub, orchestrator)
-	}
+	// We'll register middleware handlers here
+	router.AddMiddleware(
+		func(h message.HandlerFunc) message.HandlerFunc {
+			return func(msg *message.Message) ([]*message.Message, error) {
+				// Extract base message for logging
+				var base BaseMessage
+				if err := json.Unmarshal(msg.Payload, &base); err == nil {
+					zerolog.Ctx(context.Background()).Debug().
+						Str("messageType", base.MessageType).
+						Str("flowExecutionID", base.FlowExecutionID).
+						Msg("Processing message")
+				}
+				return h(msg)
+			}
+		},
+	)
 
 	return &WatermillEventRouter{
 		FlowOrchestrator: orchestrator,
-		NodeWorkers:      workers,
+		NodeWorkers:      make(map[string]NodeWorker),
+		FlowWorkers:      make(map[string]FlowWorker),
 		PubSub:           pubSub,
 		Router:           router,
 	}
 }
 
-// Add all node worker handlers
-func (r *WatermillEventRouter) SetupNodeWorkerHandlers() {
-	r.SetupNodeWorkerHandlersWithWorkers(r.NodeWorkers)
-}
-
-// SetupNodeWorkerHandlersWithWorkers registers handlers for the provided node workers
-func (r *WatermillEventRouter) SetupNodeWorkerHandlersWithWorkers(workers map[string]NodeWorker) {
-	r.NodeWorkers = workers
-	for nodeType, worker := range workers {
-		// Prep handler
-		r.Router.AddNoPublisherHandler(
-			"node."+nodeType+".prep.requested.handler",
-			"node."+nodeType+".prep.requested",
-			r.PubSub,
-			func(w NodeWorker) func(msg *message.Message) error {
-				return func(msg *message.Message) error {
-					var event NodePrepRequested
-					err := json.Unmarshal(msg.Payload, &event)
-					if err != nil {
-						return err
-					}
-					w.HandlePrepRequested(event)
-					return nil
-				}
-			}(worker),
-		)
-
-		// Exec handler
-		r.Router.AddNoPublisherHandler(
-			"node."+nodeType+".exec.requested.handler",
-			"node."+nodeType+".exec.requested",
-			r.PubSub,
-			func(w NodeWorker) func(msg *message.Message) error {
-				return func(msg *message.Message) error {
-					var event NodeExecRequested
-					err := json.Unmarshal(msg.Payload, &event)
-					if err != nil {
-						return err
-					}
-					w.HandleExecRequested(event)
-					return nil
-				}
-			}(worker),
-		)
-
-		// Post handler
-		r.Router.AddNoPublisherHandler(
-			"node."+nodeType+".post.requested.handler",
-			"node."+nodeType+".post.requested",
-			r.PubSub,
-			func(w NodeWorker) func(msg *message.Message) error {
-				return func(msg *message.Message) error {
-					var event NodePostRequested
-					err := json.Unmarshal(msg.Payload, &event)
-					if err != nil {
-						return err
-					}
-					w.HandlePostRequested(event)
-					return nil
-				}
-			}(worker),
-		)
-
-		// Exec failed handler
-		r.Router.AddNoPublisherHandler(
-			"node."+nodeType+".exec.failed.handler",
-			"node."+nodeType+".exec.failed",
-			r.PubSub,
-			func(w NodeWorker) func(msg *message.Message) error {
-				return func(msg *message.Message) error {
-					var event NodeExecFailed
-					err := json.Unmarshal(msg.Payload, &event)
-					if err != nil {
-						return err
-					}
-					w.HandleExecFailed(event)
-					return nil
-				}
-			}(worker),
-		)
-	}
-}
-
-// UpdateOrchestrator sets the orchestrator and registers its handlers
+// UpdateOrchestrator sets the orchestrator
 func (r *WatermillEventRouter) UpdateOrchestrator(orchestrator *FlowOrchestrator) {
 	if orchestrator == nil {
 		panic("orchestrator cannot be nil")
 	}
-
 	r.FlowOrchestrator = orchestrator
-	setupOrchestratorHandlers(r.Router, r.PubSub, orchestrator)
 }
 
-// Helper function to set up orchestrator-dependent handlers
-func setupOrchestratorHandlers(router *message.Router, pubSub *gochannel.GoChannel, orchestrator *FlowOrchestrator) {
-	router.AddNoPublisherHandler(
-		"flow.start.requested.handler",
-		"flow.start.requested",
-		pubSub,
+// RegisterNodeWorker registers a node worker with the router
+func (r *WatermillEventRouter) RegisterNodeWorker(worker NodeWorker) {
+	nodeType := worker.NodeType()
+	r.NodeWorkers[nodeType] = worker
+	r.setupNodeWorkerHandlers(worker)
+}
+
+// RegisterFlowWorker registers a flow worker with the router
+func (r *WatermillEventRouter) RegisterFlowWorker(worker FlowWorker) {
+	flowType := worker.FlowType()
+	r.FlowWorkers[flowType] = worker
+	r.setupFlowWorkerHandlers(worker)
+}
+
+// setupNodeWorkerHandlers sets up handlers for a node worker
+func (r *WatermillEventRouter) setupNodeWorkerHandlers(worker NodeWorker) {
+	nodeType := worker.NodeType()
+
+	// Add handler for node-specific topic
+	r.Router.AddNoPublisherHandler(
+		fmt.Sprintf("node.%s.handler", nodeType),
+		fmt.Sprintf("node.%s", nodeType),
+		r.PubSub,
 		func(msg *message.Message) error {
-			var event FlowStartRequested
-			err := json.Unmarshal(msg.Payload, &event)
-			if err != nil {
-				return err
-			}
-			orchestrator.HandleFlowStartRequested(event)
-			return nil
+			return worker.HandleMessage(msg)
 		},
 	)
 
-	// For handling node.*.post.completed events, we need to register handlers for each node type
-	// First define the handler function
-	postCompletedHandler := func(msg *message.Message) error {
-		var event NodePostCompleted
-		err := json.Unmarshal(msg.Payload, &event)
-		if err != nil {
-			return err
-		}
-		orchestrator.HandleNodePostCompleted(event)
-		return nil
+	// For backward compatibility, add handlers for the old-style topics
+	for _, msgType := range worker.SupportedMessageTypes() {
+		r.Router.AddNoPublisherHandler(
+			fmt.Sprintf("node.%s.%s.handler", nodeType, msgType),
+			fmt.Sprintf("node.%s.%s", nodeType, msgType),
+			r.PubSub,
+			func(msg *message.Message) error {
+				return worker.HandleMessage(msg)
+			},
+		)
 	}
+}
 
-	// Register for all node types
-	router.AddNoPublisherHandler(
-		"node.question.post.completed.handler",
-		"node.question.post.completed",
-		pubSub,
-		postCompletedHandler,
+// setupFlowWorkerHandlers sets up handlers for a flow worker
+func (r *WatermillEventRouter) setupFlowWorkerHandlers(worker FlowWorker) {
+	flowType := worker.FlowType()
+
+	// Add handler for flow-specific topic
+	r.Router.AddNoPublisherHandler(
+		fmt.Sprintf("flow.%s.handler", flowType),
+		fmt.Sprintf("flow.%s", flowType),
+		r.PubSub,
+		func(msg *message.Message) error {
+			return worker.HandleMessage(msg)
+		},
 	)
 
-	router.AddNoPublisherHandler(
-		"node.answer.post.completed.handler",
-		"node.answer.post.completed",
-		pubSub,
-		postCompletedHandler,
+	// Add handler for node completion events
+	r.Router.AddNoPublisherHandler(
+		fmt.Sprintf("flow.%s.node_completion_handler", flowType),
+		"node.completed",
+		r.PubSub,
+		func(msg *message.Message) error {
+			return worker.HandleNodeCompletedMessage(msg)
+		},
+	)
+}
+
+// RegisterAllNodeWorkers registers all the given node workers with the router
+func (r *WatermillEventRouter) RegisterAllNodeWorkers(workers ...NodeWorker) {
+	for _, worker := range workers {
+		r.RegisterNodeWorker(worker)
+	}
+}
+
+// RegisterAllFlowWorkers registers all the given flow workers with the router
+func (r *WatermillEventRouter) RegisterAllFlowWorkers(workers ...FlowWorker) {
+	for _, worker := range workers {
+		r.RegisterFlowWorker(worker)
+	}
+}
+
+// SetupProgressHandler sets up a handler for progress updates
+func (r *WatermillEventRouter) SetupProgressHandler(handler func(ProgressUpdateMessage) error) {
+	r.Router.AddNoPublisherHandler(
+		"progress.handler",
+		"progress",
+		r.PubSub,
+		func(msg *message.Message) error {
+			var progress ProgressUpdateMessage
+			if err := json.Unmarshal(msg.Payload, &progress); err != nil {
+				return err
+			}
+			return handler(progress)
+		},
+	)
+}
+
+// SetupFlowCompletionHandler sets up a handler for flow completion events
+func (r *WatermillEventRouter) SetupFlowCompletionHandler(handler func(FlowCompletedMessage) error) {
+	r.Router.AddNoPublisherHandler(
+		"flow.completed.handler",
+		"flow.completed",
+		r.PubSub,
+		func(msg *message.Message) error {
+			var completed FlowCompletedMessage
+			if err := json.Unmarshal(msg.Payload, &completed); err != nil {
+				return err
+			}
+			return handler(completed)
+		},
+	)
+}
+
+// SetupFlowFailureHandler sets up a handler for flow failure events
+func (r *WatermillEventRouter) SetupFlowFailureHandler(handler func(FlowFailedMessage) error) {
+	r.Router.AddNoPublisherHandler(
+		"flow.failed.handler",
+		"flow.failed",
+		r.PubSub,
+		func(msg *message.Message) error {
+			var failed FlowFailedMessage
+			if err := json.Unmarshal(msg.Payload, &failed); err != nil {
+				return err
+			}
+			return handler(failed)
+		},
 	)
 }
 

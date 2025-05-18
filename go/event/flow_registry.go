@@ -5,61 +5,84 @@ import (
 	"sync"
 )
 
-// In-memory implementation of the FlowRegistry interface
+// InMemoryFlowRegistry implements the FlowRegistry interface
 type InMemoryFlowRegistry struct {
-	flowDefs        map[string]*FlowDefinition
-	executionToFlow map[string]string
-	mutex           sync.RWMutex
+	flows        map[string]Flow
+	execToFlowID map[string]string
+	mutex        sync.RWMutex
 }
 
+// NewInMemoryFlowRegistry creates a new InMemoryFlowRegistry instance
 func NewInMemoryFlowRegistry() *InMemoryFlowRegistry {
 	return &InMemoryFlowRegistry{
-		flowDefs:        make(map[string]*FlowDefinition),
-		executionToFlow: make(map[string]string),
-		mutex:           sync.RWMutex{},
+		flows:        make(map[string]Flow),
+		execToFlowID: make(map[string]string),
+		mutex:        sync.RWMutex{},
 	}
 }
 
-func (r *InMemoryFlowRegistry) RegisterFlow(flowID string, definition *FlowDefinition) error {
+// RegisterFlow registers a flow definition with the registry
+func (r *InMemoryFlowRegistry) RegisterFlow(flowID string, flow Flow) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
-	// Make sure flowID matches definition.ID
-	if definition.ID != flowID {
-		return fmt.Errorf("flow ID mismatch: %s vs %s", flowID, definition.ID)
-	}
-	
-	r.flowDefs[flowID] = definition
+
+	r.flows[flowID] = flow
 	return nil
 }
 
-func (r *InMemoryFlowRegistry) GetFlowDefinition(flowID string) (*FlowDefinition, error) {
+// GetFlow retrieves a flow definition from the registry
+func (r *InMemoryFlowRegistry) GetFlow(flowID string) (Flow, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
-	
-	def, exists := r.flowDefs[flowID]
-	if !exists {
+
+	flow, ok := r.flows[flowID]
+	if !ok {
 		return nil, fmt.Errorf("flow definition not found: %s", flowID)
 	}
-	
-	return def, nil
+
+	return flow, nil
 }
 
-func (r *InMemoryFlowRegistry) GetFlowDefinitionByExecutionID(executionID string) (*FlowDefinition, error) {
+// GetFlowByExecutionID retrieves a flow definition by execution ID
+func (r *InMemoryFlowRegistry) GetFlowByExecutionID(executionID string) (Flow, error) {
 	r.mutex.RLock()
-	flowID, exists := r.executionToFlow[executionID]
-	r.mutex.RUnlock()
-	
-	if !exists {
-		return nil, fmt.Errorf("no flow definition found for execution ID: %s", executionID)
+	defer r.mutex.RUnlock()
+
+	flowID, ok := r.execToFlowID[executionID]
+	if !ok {
+		return nil, fmt.Errorf("no flow found for execution ID: %s", executionID)
 	}
-	
-	return r.GetFlowDefinition(flowID)
+
+	flow, ok := r.flows[flowID]
+	if !ok {
+		return nil, fmt.Errorf("flow definition not found: %s", flowID)
+	}
+
+	return flow, nil
 }
 
-func (r *InMemoryFlowRegistry) RegisterExecution(executionID string, flowID string) {
+// MapExecutionToFlow maps an execution ID to a flow ID
+func (r *InMemoryFlowRegistry) MapExecutionToFlow(executionID string, flowID string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
-	r.executionToFlow[executionID] = flowID
+
+	r.execToFlowID[executionID] = flowID
+}
+
+// For backward compatibility
+
+// GetFlowDefinition retrieves a flow definition from the registry (backward compatibility)
+func (r *InMemoryFlowRegistry) GetFlowDefinition(flowID string) (*FlowDefinition, error) {
+	flow, err := r.GetFlow(flowID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a FlowDefinition based on the Flow interface
+	return &FlowDefinition{
+		ID:            flow.ID(),
+		Name:          flow.Name(),
+		StartNodeType: flow.StartNode().Type(),
+		StartNodeID:   flow.StartNode().ID(),
+	}, nil
 }

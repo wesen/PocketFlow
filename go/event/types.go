@@ -4,91 +4,173 @@ import (
 	"time"
 )
 
-// Common event fields
-type BaseEvent struct {
-	EventID         string    `json:"event_id"`          // Unique ID of this event
-	FlowExecutionID string    `json:"flow_execution_id"` // ID of the overall flow execution
-	NodeExecutionID string    `json:"node_execution_id"` // ID of this specific node execution
-	NodeType        string    `json:"node_type"`         // Type of node (e.g., "SummarizeNode")
-	Timestamp       time.Time `json:"timestamp"`         // When this event was created
-	CorrelationID   string    `json:"correlation_id"`    // For tracking related events
+// BaseMessage is the common structure for all messages
+type BaseMessage struct {
+	MessageType     string    `json:"message_type"`                // Type of message
+	FlowExecutionID string    `json:"flow_execution_id"`           // ID of the overall flow execution
+	NodeExecutionID string    `json:"node_execution_id,omitempty"` // ID of this specific node execution (if applicable)
+	Timestamp       time.Time `json:"timestamp"`                   // When this message was created
 }
 
-// Flow Events
+// Flow message types
+const (
+	// Message sent to request flow start
+	MessageTypeFlowStartRequested = "flow.start.requested"
 
-// Flow initialization
-type FlowStartRequested struct {
-	BaseEvent
-	FlowDefinitionID string                 `json:"flow_definition_id"`
+	// Message sent after flow initialization
+	MessageTypeFlowInitialized = "flow.initialized"
+
+	// Message sent to request flow pause
+	MessageTypeFlowPauseRequested = "flow.pause.requested"
+
+	// Message sent to confirm flow is paused
+	MessageTypeFlowPaused = "flow.paused"
+
+	// Message sent to request flow resume
+	MessageTypeFlowResumeRequested = "flow.resume.requested"
+
+	// Message sent to request flow cancellation
+	MessageTypeFlowCancelRequested = "flow.cancel.requested"
+
+	// Message sent after flow successfully completes
+	MessageTypeFlowCompleted = "flow.completed"
+
+	// Message sent after flow fails
+	MessageTypeFlowFailed = "flow.failed"
+)
+
+// Node message types
+const (
+	// Message sent to request node execution
+	MessageTypeExecRequested = "node.exec.requested"
+
+	// Message sent after node completes execution
+	MessageTypeNodeCompleted = "node.completed"
+
+	// Message sent after node fails execution
+	MessageTypeExecFailed = "node.exec.failed"
+)
+
+// Progress message types
+const (
+	// Message for progress updates
+	MessageTypeProgressUpdate = "progress.update"
+)
+
+// Flow Messages
+
+// Message sent to request flow start
+type FlowStartRequestedMessage struct {
+	BaseMessage
+	FlowType          string                 `json:"flow_type"`
+	FlowDefinitionID  string                 `json:"flow_definition_id"`
 	InitialSharedData map[string]interface{} `json:"initial_shared_data"`
-	FlowParams       map[string]interface{} `json:"flow_params"`
 }
 
-// Flow completion
-type FlowCompleted struct {
-	BaseEvent
-	FinalAction     string `json:"final_action"`
-	ExecutionTimeMs int64  `json:"execution_time_ms"`
+// Message sent after flow initialization
+type FlowInitializedMessage struct {
+	BaseMessage
+	FlowType         string `json:"flow_type"`
+	FlowDefinitionID string `json:"flow_definition_id"`
 }
 
-// Flow failure
-type FlowFailed struct {
-	BaseEvent
-	ErrorMessage   string `json:"error_message"`
-	ErrorDetails   string `json:"error_details"`
-	FailedNodeType string `json:"failed_node_type"`
+// Message sent to request flow pause
+type FlowPauseRequestedMessage struct {
+	BaseMessage
+	FlowType string `json:"flow_type"`
+	Reason   string `json:"reason,omitempty"`
 }
 
-// Node Events
-
-// Node preparation phase events
-type NodePrepRequested struct {
-	BaseEvent
-	NodeParams map[string]interface{} `json:"node_params"`
+// Message sent to confirm flow is paused
+type FlowPausedMessage struct {
+	BaseMessage
+	FlowType string `json:"flow_type"`
 }
 
-type NodePrepCompleted struct {
-	BaseEvent
-	PrepResultRef string `json:"prep_result_ref"` // Reference to stored prep result
+// Message sent to request flow resume
+type FlowResumeRequestedMessage struct {
+	BaseMessage
+	FlowType string `json:"flow_type"`
 }
 
-// Node execution phase events
-type NodeExecRequested struct {
-	BaseEvent
-	PrepResultRef string `json:"prep_result_ref"`
+// Message sent to request flow cancellation
+type FlowCancelRequestedMessage struct {
+	BaseMessage
+	FlowType string `json:"flow_type"`
+	Reason   string `json:"reason,omitempty"`
 }
 
-type NodeExecCompleted struct {
-	BaseEvent
-	ExecResultRef string `json:"exec_result_ref"` // Reference to stored exec result
-	RetryCount    int    `json:"retry_count"`
+// Message sent after flow successfully completes
+type FlowCompletedMessage struct {
+	BaseMessage
+	FlowType    string      `json:"flow_type"`
+	FinalAction string      `json:"final_action"`
+	FinalResult interface{} `json:"final_result,omitempty"`
+	ExecutionMs int64       `json:"execution_ms"`
 }
 
-type NodeExecFailed struct {
-	BaseEvent
+// Message sent after flow fails
+type FlowFailedMessage struct {
+	BaseMessage
+	FlowType     string `json:"flow_type"`
 	ErrorMessage string `json:"error_message"`
+	ErrorDetails string `json:"error_details,omitempty"`
+	FailedNodeID string `json:"failed_node_id,omitempty"`
+}
+
+// Node Messages
+
+// Message sent to request node execution
+type ExecRequestedMessage struct {
+	BaseMessage
+	NodeType string                 `json:"node_type"`
+	NodeID   string                 `json:"node_id"`
+	Params   map[string]interface{} `json:"params,omitempty"`
+}
+
+// Message sent after node completes execution
+type NodeCompletedMessage struct {
+	BaseMessage
+	NodeType string      `json:"node_type"`
+	NodeID   string      `json:"node_id"`
+	Action   string      `json:"action"`
+	Result   interface{} `json:"result,omitempty"`
+}
+
+// Message sent after node fails execution
+type ExecFailedMessage struct {
+	BaseMessage
+	NodeType     string `json:"node_type"`
+	NodeID       string `json:"node_id"`
+	ErrorMessage string `json:"error_message"`
+	ErrorDetails string `json:"error_details,omitempty"`
 	RetryCount   int    `json:"retry_count"`
 	WillRetry    bool   `json:"will_retry"`
 }
 
-// Node post-processing phase events
-type NodePostRequested struct {
-	BaseEvent
-	PrepResultRef string `json:"prep_result_ref"`
-	ExecResultRef string `json:"exec_result_ref"`
+// Progress Messages
+
+// Message for progress updates
+type ProgressUpdateMessage struct {
+	BaseMessage
+	Status   string  `json:"status"`
+	Progress float64 `json:"progress"` // 0.0 to 1.0
+	Message  string  `json:"message,omitempty"`
 }
 
-type NodePostCompleted struct {
-	BaseEvent
-	Action         string `json:"action"` // The action string to determine next node
-	UpdatedDataRef string `json:"updated_data_ref"` // Reference to updated shared data
-}
+// For backward compatibility, mapping old event types
+// These can be removed once the migration is complete
+type (
+	// Map new message types to old-style event types
+	NodePrepRequested  = ExecRequestedMessage
+	NodeExecRequested  = ExecRequestedMessage
+	NodePostRequested  = ExecRequestedMessage
+	NodeExecFailed     = ExecFailedMessage
+	NodePostCompleted  = NodeCompletedMessage
+	FlowStartRequested = FlowStartRequestedMessage
+	FlowCompleted      = FlowCompletedMessage
+	FlowFailed         = FlowFailedMessage
 
-// Node transition events
-type NodeTransitionRequested struct {
-	BaseEvent
-	FromNodeType string `json:"from_node_type"`
-	Action       string `json:"action"`
-	ToNodeType   string `json:"to_node_type"`
-	ToNodeID     string `json:"to_node_id"`
-}
+	// Keep base event for compatibility
+	BaseEvent = BaseMessage
+)

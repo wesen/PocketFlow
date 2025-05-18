@@ -166,79 +166,72 @@ func (s *SQLiteStateStore) GetNodeResult(resultRef string) (interface{}, error) 
 	return result, nil
 }
 
-func (s *SQLiteStateStore) StoreFlowDefinition(flowID string, definition *FlowDefinition) error {
-	s.log.Debug().Str("method", "StoreFlowDefinition").Str("flowID", flowID).Msg("Entering StoreFlowDefinition")
-	s.log.Trace().Interface("definition", definition).Msg("Input definition for StoreFlowDefinition")
-	jsonDef, err := json.Marshal(definition)
+func (s *SQLiteStateStore) StoreFlowDefinition(flowID string, definition Flow) error {
+	// Convert the Flow to JSON
+	jsonData, err := json.Marshal(definition)
 	if err != nil {
-		s.log.Error().Err(err).Str("flowID", flowID).Msg("Failed to marshal flow definition")
-		return err
+		return fmt.Errorf("failed to marshal flow definition: %w", err)
 	}
 
-	s.log.Debug().Str("sql", "INSERT OR REPLACE INTO flow_definitions (flow_id, definition) VALUES (?, ?)").Str("flowID", flowID).Msg("Executing SQL query")
-	_, err = s.db.Exec(
-		"INSERT OR REPLACE INTO flow_definitions (flow_id, definition) VALUES (?, ?)",
-		flowID, string(jsonDef),
-	)
-
+	stmt, err := s.db.Prepare(`
+		INSERT INTO flow_definitions (flow_id, definition)
+		VALUES (?, ?)
+		ON CONFLICT(flow_id) DO UPDATE SET definition = excluded.definition
+	`)
 	if err != nil {
-		s.log.Error().Err(err).Str("flowID", flowID).Msg("Failed to store flow definition in database")
-		return err
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(flowID, jsonData)
+	if err != nil {
+		return fmt.Errorf("failed to store flow definition: %w", err)
 	}
 
-	s.log.Trace().Str("flowID", flowID).Msg("Flow definition stored successfully")
-	s.log.Debug().Str("method", "StoreFlowDefinition").Str("flowID", flowID).Msg("Exiting StoreFlowDefinition")
 	return nil
 }
 
-func (s *SQLiteStateStore) GetFlowDefinition(flowID string) (*FlowDefinition, error) {
-	s.log.Debug().Str("method", "GetFlowDefinition").Str("flowID", flowID).Msg("Entering GetFlowDefinition")
-	var jsonDef string
-	s.log.Debug().Str("sql", "SELECT definition FROM flow_definitions WHERE flow_id = ?").Str("flowID", flowID).Msg("Executing SQL query")
-	err := s.db.QueryRow(
-		"SELECT definition FROM flow_definitions WHERE flow_id = ?",
-		flowID,
-	).Scan(&jsonDef)
+func (s *SQLiteStateStore) GetFlowDefinition(flowID string) (Flow, error) {
+	// This is a simplification. In reality, you'd need to
+	// deserialize to the correct concrete type based on some metadata
 
+	stmt, err := s.db.Prepare(`
+		SELECT definition FROM flow_definitions
+		WHERE flow_id = ?
+	`)
 	if err != nil {
-		s.log.Error().Err(err).Str("flowID", flowID).Msg("Failed to get flow definition from database")
-		return nil, err
+		return nil, fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	var jsonData []byte
+	err = stmt.QueryRow(flowID).Scan(&jsonData)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("flow definition not found: %s", flowID)
+		}
+		return nil, fmt.Errorf("failed to query flow definition: %w", err)
 	}
 
-	var definition FlowDefinition
-	err = json.Unmarshal([]byte(jsonDef), &definition)
+	// Deserialize to flowDefinition
+	var flow flowDefinition
+	err = json.Unmarshal(jsonData, &flow)
 	if err != nil {
-		s.log.Error().Err(err).Str("flowID", flowID).Msg("Failed to unmarshal flow definition JSON")
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal flow definition: %w", err)
 	}
 
-	s.log.Trace().Str("flowID", flowID).Interface("definition", definition).Msg("Fetched flow definition successfully")
-	s.log.Debug().Str("method", "GetFlowDefinition").Str("flowID", flowID).Msg("Exiting GetFlowDefinition")
-	return &definition, nil
+	return &flow, nil
 }
 
-func (s *SQLiteStateStore) GetFlowDefinitionByExecutionID(executionID string) (*FlowDefinition, error) {
-	s.log.Debug().Str("method", "GetFlowDefinitionByExecutionID").Str("executionID", executionID).Msg("Entering GetFlowDefinitionByExecutionID")
-	var flowDefID string
-	s.log.Debug().Str("sql", "SELECT flow_definition_id FROM flow_executions WHERE flow_execution_id = ?").Str("executionID", executionID).Msg("Executing SQL query")
-	err := s.db.QueryRow(
-		"SELECT flow_definition_id FROM flow_executions WHERE flow_execution_id = ?",
-		executionID,
-	).Scan(&flowDefID)
-
+func (s *SQLiteStateStore) GetFlowDefinitionByExecutionID(executionID string) (Flow, error) {
+	// Get the flow ID for this execution
+	flowID, err := s.getFlowIDForExecution(executionID)
 	if err != nil {
-		s.log.Error().Err(err).Str("executionID", executionID).Msg("Failed to get flow definition ID from flow_executions table")
 		return nil, err
 	}
 
-	s.log.Trace().Str("executionID", executionID).Str("flowDefID", flowDefID).Msg("Fetched flow definition ID successfully")
-	def, err := s.GetFlowDefinition(flowDefID)
-	if err != nil {
-		s.log.Error().Err(err).Str("flowDefID", flowDefID).Msg("Failed to get flow definition by ID")
-		return nil, err
-	}
-	s.log.Debug().Str("method", "GetFlowDefinitionByExecutionID").Str("executionID", executionID).Msg("Exiting GetFlowDefinitionByExecutionID")
-	return def, nil
+	// Get the flow definition
+	return s.GetFlowDefinition(flowID)
 }
 
 // Store a mapping between execution ID and definition ID
@@ -258,4 +251,45 @@ func (s *SQLiteStateStore) StoreFlowExecution(executionID string, definitionID s
 	s.log.Trace().Str("executionID", executionID).Str("definitionID", definitionID).Msg("Flow execution stored successfully")
 	s.log.Debug().Str("method", "StoreFlowExecution").Str("executionID", executionID).Str("definitionID", definitionID).Msg("Exiting StoreFlowExecution")
 	return err
+}
+
+func (s *SQLiteStateStore) UpdateSharedData(flowExecutionID string, nodeID string, result interface{}) error {
+	// First get the existing shared data
+	data, err := s.GetSharedData(flowExecutionID)
+	if err != nil {
+		return err
+	}
+
+	// Update the data with the result
+	// Using the nodeID as the key for simplicity, but in a real implementation
+	// you might want to use a more structured approach
+	if result != nil {
+		data[nodeID] = result
+	}
+
+	// Store the updated data
+	return s.StoreSharedData(flowExecutionID, data)
+}
+
+// Helper function to get the flow ID for a given execution ID
+func (s *SQLiteStateStore) getFlowIDForExecution(executionID string) (string, error) {
+	stmt, err := s.db.Prepare(`
+		SELECT flow_definition_id FROM flow_executions
+		WHERE flow_execution_id = ?
+	`)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	var flowID string
+	err = stmt.QueryRow(executionID).Scan(&flowID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no flow ID found for execution ID: %s", executionID)
+		}
+		return "", fmt.Errorf("failed to query flow ID: %w", err)
+	}
+
+	return flowID, nil
 }

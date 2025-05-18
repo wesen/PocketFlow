@@ -1,47 +1,69 @@
 package event
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"time"
 )
 
 type FlowOrchestrator struct {
-	Publisher    EventPublisher
-	StateStore   StateStore
-	FlowRegistry FlowRegistry
+	Publisher  EventPublisher
+	StateStore StateStore
+	Registry   FlowRegistry
 }
 
 func NewFlowOrchestrator(publisher EventPublisher, stateStore StateStore, registry FlowRegistry) *FlowOrchestrator {
 	return &FlowOrchestrator{
-		Publisher:    publisher,
-		StateStore:   stateStore,
-		FlowRegistry: registry,
+		Publisher:  publisher,
+		StateStore: stateStore,
+		Registry:   registry,
 	}
 }
 
-// Generate a new UUID string
-func generateUUID() string {
-	return uuid.New().String()
+// RegisterFlow registers a flow definition with the orchestrator
+func (o *FlowOrchestrator) RegisterFlow(flow Flow) error {
+	return o.Registry.RegisterFlow(flow.ID(), flow)
 }
 
-// Handle flow start requests
+// GetNextNode determines the next node to execute based on completed node and action
+func (o *FlowOrchestrator) GetNextNode(flow Flow, currentNodeID, action string) (Node, bool) {
+	return flow.GetNextNode(currentNodeID, action)
+}
+
+// StartFlow initiates flow execution with the flow definition from registry
+func (o *FlowOrchestrator) StartFlow(flowType, flowID string, initialData map[string]interface{}) string {
+	flowExecutionID := uuid.New().String()
+
+	o.Publisher.Publish(
+		fmt.Sprintf("flow.%s", flowType),
+		FlowStartRequestedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeFlowStartRequested,
+				FlowExecutionID: flowExecutionID,
+				Timestamp:       time.Now(),
+			},
+			FlowType:          flowType,
+			FlowDefinitionID:  flowID,
+			InitialSharedData: initialData,
+		},
+	)
+
+	return flowExecutionID
+}
+
+// For backward compatibility, these methods are kept but delegate to the new methods
+
+// HandleFlowStartRequested is kept for backward compatibility
 func (o *FlowOrchestrator) HandleFlowStartRequested(event FlowStartRequested) {
 	log.Info().
 		Str("flowExecutionID", event.FlowExecutionID).
 		Str("flowDefinitionID", event.FlowDefinitionID).
-		Str("correlationID", event.CorrelationID).
-		Msg("Handling flow start request")
+		Msg("Handling flow start request (deprecated method)")
 
-	// Store initial shared data
-	o.StateStore.StoreSharedData(event.FlowExecutionID, event.InitialSharedData)
-	log.Debug().
-		Str("flowExecutionID", event.FlowExecutionID).
-		Interface("sharedData", event.InitialSharedData).
-		Msg("Stored initial shared data")
-	
 	// Get flow definition
-	flowDef, err := o.FlowRegistry.GetFlowDefinition(event.FlowDefinitionID)
+	flowDef, err := o.Registry.GetFlowDefinition(event.FlowDefinitionID)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -49,76 +71,40 @@ func (o *FlowOrchestrator) HandleFlowStartRequested(event FlowStartRequested) {
 			Str("flowDefinitionID", event.FlowDefinitionID).
 			Msg("Failed to get flow definition")
 
-		o.Publisher.Publish("flow.failed", FlowFailed{
-			BaseEvent: BaseEvent{
-				EventID:         generateUUID(),
+		o.Publisher.Publish("flow.failed", FlowFailedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeFlowFailed,
 				FlowExecutionID: event.FlowExecutionID,
 				Timestamp:       time.Now(),
-				CorrelationID:   event.CorrelationID,
 			},
-			ErrorMessage:   "Failed to get flow definition",
-			ErrorDetails:   err.Error(),
-			FailedNodeType: "",
+			FlowType:     "unknown", // We don't know the flow type here
+			ErrorMessage: "Failed to get flow definition",
+			ErrorDetails: err.Error(),
 		})
 		return
 	}
-	
-	// Store the mapping between execution ID and definition ID
-	err = o.StateStore.StoreFlowExecution(event.FlowExecutionID, event.FlowDefinitionID)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("flowExecutionID", event.FlowExecutionID).
-			Str("flowDefinitionID", event.FlowDefinitionID).
-			Msg("Failed to store flow execution mapping")
 
-		o.Publisher.Publish("flow.failed", FlowFailed{
-			BaseEvent: BaseEvent{
-				EventID:         generateUUID(),
-				FlowExecutionID: event.FlowExecutionID,
-				Timestamp:       time.Now(),
-				CorrelationID:   event.CorrelationID,
-			},
-			ErrorMessage:   "Failed to store flow execution mapping",
-			ErrorDetails:   err.Error(),
-			FailedNodeType: "",
-		})
-		return
+	// Determine the flow type
+	flowType := "default"
+	if flowDef != nil {
+		// Use the start node type as the flow type for backward compatibility
+		flowType = flowDef.StartNodeType
 	}
-	
-	// Create node execution ID for start node
-	nodeExecID := generateUUID()
-	
-	log.Info().
-		Str("flowExecutionID", event.FlowExecutionID).
-		Str("nodeExecutionID", nodeExecID).
-		Str("nodeType", flowDef.StartNodeType).
-		Msg("Requesting start node preparation")
 
-	// Request start node prep
-	o.Publisher.Publish("node."+flowDef.StartNodeType+".prep.requested", NodePrepRequested{
-		BaseEvent: BaseEvent{
-			EventID:         generateUUID(),
-			FlowExecutionID: event.FlowExecutionID,
-			NodeExecutionID: nodeExecID,
-			NodeType:        flowDef.StartNodeType,
-			Timestamp:       time.Now(),
-			CorrelationID:   event.CorrelationID,
-		},
-		NodeParams: flowDef.StartNodeParams,
-	})
+	// Forward to the new StartFlow method
+	o.StartFlow(flowType, event.FlowDefinitionID, event.InitialSharedData)
 }
 
-// Handle node post completion to determine next node
+// HandleNodePostCompleted is kept for backward compatibility
 func (o *FlowOrchestrator) HandleNodePostCompleted(event NodePostCompleted) {
 	log.Info().
 		Str("flowExecutionID", event.FlowExecutionID).
 		Str("nodeType", event.NodeType).
 		Str("action", event.Action).
-		Msg("Handling node post completion")
+		Msg("Handling node post completion (deprecated method)")
 
 	// Get flow definition for this execution
-	flowDef, err := o.FlowRegistry.GetFlowDefinitionByExecutionID(event.FlowExecutionID)
+	_, err := o.Registry.GetFlowByExecutionID(event.FlowExecutionID)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -126,90 +112,33 @@ func (o *FlowOrchestrator) HandleNodePostCompleted(event NodePostCompleted) {
 			Str("nodeType", event.NodeType).
 			Msg("Failed to get flow definition")
 
-		o.Publisher.Publish("flow.failed", FlowFailed{
-			BaseEvent: BaseEvent{
-				EventID:         generateUUID(),
+		o.Publisher.Publish("flow.failed", FlowFailedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeFlowFailed,
 				FlowExecutionID: event.FlowExecutionID,
 				Timestamp:       time.Now(),
-				CorrelationID:   event.CorrelationID,
 			},
-			ErrorMessage:   "Failed to get flow definition",
-			ErrorDetails:   err.Error(),
-			FailedNodeType: event.NodeType,
+			FlowType:     "unknown", // We don't know the flow type here
+			ErrorMessage: "Failed to get flow definition",
+			ErrorDetails: err.Error(),
 		})
 		return
 	}
-	
-	// Find next node based on current node type and action
-	nextNode, exists := flowDef.GetNextNode(event.NodeType, event.Action)
-	
-	if !exists {
-		log.Info().
-			Str("flowExecutionID", event.FlowExecutionID).
-			Str("nodeType", event.NodeType).
-			Str("action", event.Action).
-			Msg("Flow completed - no next node found")
 
-		// Flow is complete, no next node
-		o.Publisher.Publish("flow.completed", FlowCompleted{
-			BaseEvent: BaseEvent{
-				EventID:         generateUUID(),
+	// Convert the old-style NodePostCompleted to new-style NodeCompletedMessage
+	o.Publisher.Publish(
+		"node.completed",
+		NodeCompletedMessage{
+			BaseMessage: BaseMessage{
+				MessageType:     MessageTypeNodeCompleted,
 				FlowExecutionID: event.FlowExecutionID,
-				NodeExecutionID: "",
-				NodeType:        "",
+				NodeExecutionID: event.NodeExecutionID,
 				Timestamp:       time.Now(),
-				CorrelationID:   event.CorrelationID,
 			},
-			FinalAction:     event.Action,
-			ExecutionTimeMs: 0, // Could calculate this if needed
-		})
-		return
-	}
-	
-	// Create new node execution ID
-	nextNodeExecID := generateUUID()
-
-	log.Info().
-		Str("flowExecutionID", event.FlowExecutionID).
-		Str("fromNodeType", event.NodeType).
-		Str("toNodeType", nextNode.Type).
-		Str("action", event.Action).
-		Str("nextNodeExecutionID", nextNodeExecID).
-		Msg("Transitioning to next node")
-	
-	// Request transition to next node
-	o.Publisher.Publish("node.transition.requested", NodeTransitionRequested{
-		BaseEvent: BaseEvent{
-			EventID:         generateUUID(),
-			FlowExecutionID: event.FlowExecutionID,
-			NodeExecutionID: nextNodeExecID,
-			NodeType:        nextNode.Type,
-			Timestamp:       time.Now(),
-			CorrelationID:   event.CorrelationID,
+			NodeType: event.NodeType,
+			NodeID:   event.NodeExecutionID, // Best guess for the node ID
+			Action:   event.Action,
+			Result:   nil, // We don't have the result in the old event
 		},
-		FromNodeType: event.NodeType,
-		Action:       event.Action,
-		ToNodeType:   nextNode.Type,
-		ToNodeID:     nextNode.ID,
-	})
-	
-	log.Debug().
-		Str("flowExecutionID", event.FlowExecutionID).
-		Str("nodeType", nextNode.Type).
-		Str("nodeExecutionID", nextNodeExecID).
-		Interface("nodeParams", nextNode.Params).
-		Msg("Requesting next node preparation")
-
-	// Request next node prep
-	o.Publisher.Publish("node."+nextNode.Type+".prep.requested", NodePrepRequested{
-		BaseEvent: BaseEvent{
-			EventID:         generateUUID(),
-			FlowExecutionID: event.FlowExecutionID,
-			NodeExecutionID: nextNodeExecID,
-			NodeType:        nextNode.Type,
-			Timestamp:       time.Now(),
-			CorrelationID:   event.CorrelationID,
-		},
-		NodeParams: nextNode.Params,
-	})
+	)
 }
