@@ -196,6 +196,9 @@ func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error
 		return err
 	}
 
+	// Also add mapping in the in-memory registry for faster lookups
+	w.Registry.MapExecutionToFlow(event.FlowExecutionID, event.FlowDefinitionID)
+
 	// Publish flow initialized event
 	w.Publisher.Publish(
 		fmt.Sprintf("flow.%s", w.FlowTypeName),

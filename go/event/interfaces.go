@@ -152,6 +152,9 @@ type FlowRegistry interface {
 	// Register a flow definition
 	RegisterFlow(flowID string, flow Flow) error
 
+	// Map execution ID to flow ID
+	MapExecutionToFlow(executionID string, flowID string)
+
 	// For backwards compatibility
 	GetFlowDefinition(flowID string) (*FlowDefinition, error)
 }

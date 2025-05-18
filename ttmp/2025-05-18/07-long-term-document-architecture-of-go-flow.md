@@ -685,6 +685,158 @@ func (w *GreetingNodeWorker) HandlePostRequested(event NodePostRequested) {}
 func (w *GreetingNodeWorker) HandleExecFailed(event NodeExecFailed) {}
 ```
 
+### 4.2.1 Using SimpleNodeHandler for Simplified Node Creation
+
+While the above approach gives you complete control, it requires writing a significant amount of boilerplate code. PocketFlow also provides a `SimpleNodeHandler` interface that focuses purely on the business logic, with all the messaging infrastructure handled automatically:
+
+```go
+// SimpleNodeHandler is a simplified interface for node handlers
+type SimpleNodeHandler interface {
+    // Prep handles the preparation phase
+    Prep(ctx NodeContext) (interface{}, error)
+
+    // Exec handles the execution phase
+    Exec(ctx NodeContext, prepResult interface{}) (interface{}, error)
+
+    // Post handles the post-processing phase and returns the action to take
+    Post(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
+}
+
+// NodeContext provides access to the execution context of a node
+type NodeContext struct {
+    FlowExecutionID string
+    NodeExecutionID string
+    NodeID          string
+    NodeType        string
+    Params          map[string]interface{}
+    SharedData      map[string]interface{}
+    StateStore      StateStore
+}
+```
+
+This interface breaks down the node handling into three logical phases:
+
+1. **Prep**: Prepare for execution, validate inputs, gather needed data
+2. **Exec**: Perform the main execution, typically the most resource-intensive phase
+3. **Post**: Process results and determine the next action to take
+
+Here's an example of implementing a greeting node using the SimpleNodeHandler:
+
+```go
+// GreetingHandler implements SimpleNodeHandler
+type GreetingHandler struct {
+    Prefix string
+}
+
+// Prep validates the input parameters
+func (h *GreetingHandler) Prep(ctx NodeContext) (interface{}, error) {
+    // Extract name from params or use default
+    name := "User"
+    if val, ok := ctx.Params["name"]; ok {
+        if nameStr, ok := val.(string); ok && nameStr != "" {
+            name = nameStr
+        }
+    }
+    return name, nil
+}
+
+// Exec generates the greeting message
+func (h *GreetingHandler) Exec(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+    name, _ := prepResult.(string)
+    greeting := fmt.Sprintf("%s %s!", h.Prefix, name)
+    return greeting, nil
+}
+
+// Post determines the next action and prepares the final result
+func (h *GreetingHandler) Post(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+    greeting, _ := execResult.(string)
+    return "default", greeting, nil
+}
+```
+
+To create and register a node worker using this handler:
+
+```go
+// Create the simple node handler
+greetingHandler := &GreetingHandler{Prefix: "Hello,"}
+
+// Create the node worker using the SimpleNode wrapper
+greetingNode := NewSimpleNode(
+    "greeting",        // node type
+    greetingHandler,   // handler implementation
+    publisher,         // message publisher
+    stateStore,        // state store
+)
+
+// Register with the router
+watermillRouter.RegisterNodeWorker(greetingNode)
+```
+
+The `SimpleNode` implementation handles all the message parsing, state management, and error handling, allowing you to focus solely on the business logic.
+
+### 4.2.2 Using NodeBuilder for Function-Based Nodes
+
+For even simpler cases, PocketFlow provides a `NodeBuilder` that lets you create nodes using callback functions:
+
+```go
+// NodeBuilder provides a fluent API for building nodes
+type NodeBuilder interface {
+    // WithName sets the display name for the node
+    WithName(name string) NodeBuilder
+
+    // WithParam adds a parameter to the node
+    WithParam(key string, value interface{}) NodeBuilder
+
+    // WithPrep sets the prep handler function
+    WithPrep(handler func(ctx NodeContext) (interface{}, error)) NodeBuilder
+
+    // WithExec sets the exec handler function
+    WithExec(handler func(ctx NodeContext, prepResult interface{}) (interface{}, error)) NodeBuilder
+
+    // WithPost sets the post handler function
+    WithPost(handler func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) NodeBuilder
+
+    // Build creates a Node instance with the specified configuration
+    Build() NodeWorker
+}
+```
+
+Using this builder, you can create nodes with minimal code:
+
+```go
+// Create a greeting node using the builder
+greetingNode := NewNodeBuilder("greeting", publisher, stateStore).
+    WithName("Friendly Greeting").
+    WithParam("prefix", "Hello,").
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        // Get name from params or use default
+        name := "User"
+        if val, ok := ctx.Params["name"]; ok {
+            if nameStr, ok := val.(string); ok && nameStr != "" {
+                name = nameStr
+            }
+        }
+        
+        // Get prefix from params
+        prefix := "Hello,"
+        if val, ok := ctx.Params["prefix"]; ok {
+            if prefixStr, ok := val.(string); ok && prefixStr != "" {
+                prefix = prefixStr
+            }
+        }
+        
+        // Generate greeting
+        greeting := fmt.Sprintf("%s %s!", prefix, name)
+        return greeting, nil
+    }).
+    Build()
+
+// Register with the router
+watermillRouter.RegisterNodeWorker(greetingNode)
+```
+
+This approach is particularly useful for simple nodes or when prototyping. For more complex nodes with sophisticated business logic, the `SimpleNodeHandler` interface or the full `NodeWorker` implementation might be more appropriate.
+
 ### 4.3 Customizing Flow Workers
 
 While the `GenericFlowWorker` is sufficient for most use cases, you might need to implement a custom flow worker if you have specialized flow logic. To do this:
@@ -863,7 +1015,109 @@ When implementing a node worker, consider these best practices:
 4. **Timeout Handling**: Implement timeouts for long-running operations
 5. **Graceful Cancellation**: Support cancellation when receiving appropriate messages
 
-### 5.3 Flow Worker Message Handling Patterns
+### 5.3 Message Processing Infrastructure
+
+#### 5.3.1 Middleware for Error Handling and Message Processing
+
+PocketFlow's Go implementation includes several middleware components to handle common message processing concerns:
+
+```go
+// PoisonQueueMiddleware prevents endless retries of failing messages
+func PoisonQueueMiddleware(maxRetries int) message.HandlerMiddleware {
+    return func(h message.HandlerFunc) message.HandlerFunc {
+        return func(msg *message.Message) ([]*message.Message, error) {
+            // Check if the message has metadata for retry count
+            retryCount := 0
+            if retryCountStr := msg.Metadata.Get("retry_count"); retryCountStr != "" {
+                if _, err := fmt.Sscanf(retryCountStr, "%d", &retryCount); err != nil {
+                    retryCount = 0
+                }
+            }
+
+            // Extract message info for logging
+            var base BaseMessage
+            _ = json.Unmarshal(msg.Payload, &base) // Ignore error
+
+            // Check if we've reached the max retries
+            if retryCount >= maxRetries {
+                log.Warn().
+                    Int("retryCount", retryCount).
+                    Str("messageID", msg.UUID).
+                    Str("messageType", base.MessageType).
+                    Str("flowExecutionID", base.FlowExecutionID).
+                    Msg("Message retries exceeded, discarding poisoned message")
+                
+                // Return without error to acknowledge and remove the message
+                return nil, nil
+            }
+
+            // Call the original handler
+            messages, err := h(msg)
+
+            // If there was an error, increment the retry count
+            if err != nil {
+                log.Warn().
+                    Err(err).
+                    Int("retryCount", retryCount).
+                    Str("messageID", msg.UUID).
+                    Str("messageType", base.MessageType).
+                    Str("flowExecutionID", base.FlowExecutionID).
+                    Msg("Message handling failed, will retry")
+
+                // Increment retry count in metadata
+                for i := range messages {
+                    messages[i].Metadata.Set("retry_count", fmt.Sprintf("%d", retryCount+1))
+                }
+            }
+
+            return messages, err
+        }
+    }
+}
+
+// RecoveryMiddleware prevents panics from crashing the application
+func RecoveryMiddleware() message.HandlerMiddleware {
+    return func(h message.HandlerFunc) message.HandlerFunc {
+        return func(msg *message.Message) (messages []*message.Message, err error) {
+            defer func() {
+                if r := recover(); r != nil {
+                    // Extract message info for logging
+                    var base BaseMessage
+                    _ = json.Unmarshal(msg.Payload, &base) // Ignore error
+
+                    log.Error().
+                        Interface("panic", r).
+                        Str("messageID", msg.UUID).
+                        Str("messageType", base.MessageType).
+                        Str("flowExecutionID", base.FlowExecutionID).
+                        Msg("Recovered from panic in message handler")
+
+                    // Return an error to trigger retry logic
+                    messages = nil
+                    err = fmt.Errorf("panic recovered: %v", r)
+                }
+            }()
+
+            return h(msg)
+        }
+    }
+}
+```
+
+These middlewares can be added to the router during system setup:
+
+```go
+// Add poison queue middleware to prevent infinite retries
+router.AddMiddleware(PoisonQueueMiddleware(3))
+
+// Add recovery middleware to catch panics
+router.AddMiddleware(RecoveryMiddleware())
+
+// Add logging middleware for detailed logs
+router.AddMiddleware(LoggingMiddleware())
+```
+
+#### 5.3.2 Flow Worker Message Handling Patterns
 
 Flow workers manage the flow execution lifecycle and coordinate the progression between nodes. The following code illustrates the key aspects of flow worker implementation:
 
@@ -1546,210 +1800,138 @@ By focusing on these areas, contributors can help make PocketFlow an even more p
 
 To demonstrate how to build an agent with PocketFlow, let's create a simple question-answering agent that uses an LLM to respond to user questions. This example will showcase the core concepts and patterns of the framework.
 
-#### 1. Define Your Node Workers
+#### 1. Define Your Nodes Using SimpleNodeHandler and NodeBuilder
 
-First, implement two node workers: one for handling user questions and another for generating answers using an LLM:
+With PocketFlow's simplified node creation APIs, we have two clean approaches to create nodes:
 
 ```go
-// QuestionNodeWorker handles user interaction
-type QuestionNodeWorker struct {
-    Publisher  EventPublisher
-    StateStore StateStore
-    Question   string
-}
+// Option 1: Using SimpleNodeHandler interface
 
-func NewQuestionNodeWorker(publisher EventPublisher, stateStore StateStore, question string) *QuestionNodeWorker {
-    return &QuestionNodeWorker{
-        Publisher:  publisher,
-        StateStore: stateStore,
-        Question:   question,
+// QuestionHandler implements SimpleNodeHandler for user interaction
+type QuestionHandler struct {}
+
+// Prep handles the preparation phase
+func (h *QuestionHandler) Prep(ctx NodeContext) (interface{}, error) {
+    // Get question prompt from params or use default
+    prompt := "What would you like to know about?"
+    if val, ok := ctx.Params["prompt"]; ok {
+        if promptStr, ok := val.(string); ok && promptStr != "" {
+            prompt = promptStr
+        }
     }
+    return prompt, nil
 }
 
-func (w *QuestionNodeWorker) NodeType() string {
-    return "question"
-}
-
-func (w *QuestionNodeWorker) SupportedMessageTypes() []string {
-    return []string{MessageTypeExecRequested}
-}
-
-func (w *QuestionNodeWorker) HandleMessage(msgObj interface{}) error {
-    msg, ok := msgObj.(*message.Message)
-    if !ok {
-        return fmt.Errorf("invalid message type")
-    }
-    
-    var execReq ExecRequestedMessage
-    if err := json.Unmarshal(msg.Payload, &execReq); err != nil {
-        return err
-    }
-    
+// Exec handles the actual processing
+func (h *QuestionHandler) Exec(ctx NodeContext, prepResult interface{}) (interface{}, error) {
     // In a real implementation, this would prompt the user for input
     // For this example, we'll simulate user input
+    prompt := prepResult.(string)
+    log.Info().Str("prompt", prompt).Msg("Asking user question")
+    
+    // Simulate user response
     userAnswer := "How does PocketFlow work?"
-    
-    // Store the answer in shared data
-    if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "user_answer", userAnswer); err != nil {
-        return err
-    }
-    
-    // Publish completion with default action to move to the next node
-    return w.Publisher.Publish(
-        "node.completed",
-        NodeCompletedMessage{
-            BaseMessage: BaseMessage{
-                MessageType:     MessageTypeNodeCompleted,
-                FlowExecutionID: execReq.FlowExecutionID,
-                NodeExecutionID: execReq.NodeExecutionID,
-                Timestamp:       time.Now(),
-            },
-            NodeType: w.NodeType(),
-            NodeID:   execReq.NodeID,
-            Action:   "default",
-            Result:   userAnswer,
-        },
-    )
+    return userAnswer, nil
 }
 
-// AnswerNodeWorker processes questions using an LLM
-type AnswerNodeWorker struct {
-    Publisher  EventPublisher
-    StateStore StateStore
-    LLMClient  LLMClient
+// Post handles the post-processing and determines next action
+func (h *QuestionHandler) Post(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+    userAnswer := execResult.(string)
+    return "default", userAnswer, nil
 }
 
-func NewAnswerNodeWorker(publisher EventPublisher, stateStore StateStore, llmClient LLMClient) *AnswerNodeWorker {
-    return &AnswerNodeWorker{
-        Publisher:  publisher,
-        StateStore: stateStore,
-        LLMClient:  llmClient,
-    }
-}
+// Option 2: Using NodeBuilder with function callbacks
 
-func (w *AnswerNodeWorker) NodeType() string {
-    return "answer"
-}
-
-func (w *AnswerNodeWorker) SupportedMessageTypes() []string {
-    return []string{MessageTypeExecRequested}
-}
-
-func (w *AnswerNodeWorker) HandleMessage(msgObj interface{}) error {
-    msg, ok := msgObj.(*message.Message)
-    if !ok {
-        return fmt.Errorf("invalid message type")
-    }
-    
-    var execReq ExecRequestedMessage
-    if err := json.Unmarshal(msg.Payload, &execReq); err != nil {
-        return err
-    }
-    
-    // Get the user's question from shared data
-    sharedData, err := w.StateStore.GetSharedData(execReq.FlowExecutionID)
-    if err != nil {
-        return err
-    }
-    
-    userQuestion, ok := sharedData["user_answer"].(string)
-    if !ok {
-        return fmt.Errorf("user question not found in shared data")
-    }
-    
-    // Call the LLM to generate an answer
-    prompt := fmt.Sprintf("Given the user's response: %s\nProvide a detailed explanation.", userQuestion)
-    llmResponse, err := w.LLMClient.Call(prompt)
-    if err != nil {
-        return err
-    }
-    
-    // Store the LLM response in shared data
-    if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "llm_response", llmResponse); err != nil {
-        return err
-    }
-    
-    // Publish completion
-    return w.Publisher.Publish(
-        "node.completed",
-        NodeCompletedMessage{
-            BaseMessage: BaseMessage{
-                MessageType:     MessageTypeNodeCompleted,
-                FlowExecutionID: execReq.FlowExecutionID,
-                NodeExecutionID: execReq.NodeExecutionID,
-                Timestamp:       time.Now(),
-            },
-            NodeType: w.NodeType(),
-            NodeID:   execReq.NodeID,
-            Action:   "default",
-            Result:   llmResponse,
-        },
-    )
-}
+// Creating the answer node using NodeBuilder
+answerNode := NewNodeBuilder("answer", publisher, stateStore).
+    WithName("LLM Answer Generator").
+    WithParam("model", "gpt-4").
+    WithPrep(func(ctx NodeContext) (interface{}, error) {
+        // Get the user's question from shared data
+        userQuestion, ok := ctx.SharedData["question"].(string)
+        if !ok {
+            return nil, fmt.Errorf("user question not found in shared data")
+        }
+        return userQuestion, nil
+    }).
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        userQuestion := prepResult.(string)
+        
+        // Get model from params or use default
+        model := "gpt-4"
+        if val, ok := ctx.Params["model"]; ok {
+            if modelStr, ok := val.(string); ok && modelStr != "" {
+                model = modelStr
+            }
+        }
+        
+        // Construct prompt
+        prompt := fmt.Sprintf("Given the user's question: %s\nProvide a detailed explanation.", userQuestion)
+        
+        // Mock LLM call for this example
+        log.Info().Str("model", model).Str("prompt", prompt).Msg("Calling LLM")
+        
+        // For a real implementation, would call an actual LLM API
+        llmResponse := "PocketFlow is an event-driven framework for building LLM applications using a graph-based workflow approach."
+        return llmResponse, nil
+    }).
+    WithPost(func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+        llmResponse := execResult.(string)
+        return "default", llmResponse, nil
+    }).
+    Build()
 ```
 
-#### 2. Define Your Flow
+#### 2. Register Your Nodes with the Router
+
+Once you've defined your nodes, register them with the event router:
+
+```go
+// Create the question node using SimpleNodeHandler
+questionHandler := &QuestionHandler{}
+questionNode := NewSimpleNode(
+    "question",
+    questionHandler,
+    publisher,
+    stateStore,
+)
+
+// Register both nodes with the router
+watermillRouter.RegisterNodeWorker(questionNode)
+watermillRouter.RegisterNodeWorker(answerNode)
+```
+
+#### 3. Define Your Flow
 
 Next, define the flow that connects these nodes using the builder pattern:
 
 ```go
-// Define nodes
-questionNode := NewNode("question", map[string]interface{}{
-    "question": "What would you like to know about?",
+// Define node definitions
+questionNodeDef := NewNode("question", map[string]interface{}{
+    "prompt": "What would you like to know about?",
 })
-answerNode := NewNode("answer", map[string]interface{}{})
+answerNodeDef := NewNode("answer", map[string]interface{}{
+    "model": "gpt-4",
+})
 
 // Define flow using builder pattern
 qaFlow := NewFlowBuilder().
-    Begin(questionNode).
-    Then(answerNode).
+    Begin(questionNodeDef).
+    Then(answerNodeDef).
     Build()
-```
-
-#### 3. Set Up the System Components
-
-Initialize the system components and register your workers:
-
-```go
-// Initialize the state store
-stateStore, err := event.NewSQLiteStateStore(":memory:")
-if err != nil {
-    log.Fatal().Err(err).Msg("Failed to create state store")
-    os.Exit(1)
-}
-
-// Create a flow registry
-flowRegistry := event.NewInMemoryFlowRegistry()
-
-// Set up the event router
-watermillRouter := event.NewWatermillEventRouter(nil)
-publisher := event.NewWatermillPublisher(watermillRouter.PubSub)
-
-// Create the flow orchestrator
-orchestrator := event.NewFlowOrchestrator(publisher, stateStore, flowRegistry)
-watermillRouter.UpdateOrchestrator(orchestrator)
-
-// Create a mock LLM client for testing
-mockLLM := &MockLLMClient{
-    Responses: map[string]string{
-        "Given the user's response: How does PocketFlow work?\nProvide a detailed explanation.": 
-            "PocketFlow is an event-driven framework for building complex, LLM-powered applications. " +
-            "It uses a graph-based workflow approach where nodes represent tasks and flows connect nodes together. " +
-            "The system uses a publish-subscribe pattern for communication between components.",
-    },
-}
-
-// Create and register node workers
-questionWorker := NewQuestionNodeWorker(publisher, stateStore, "What would you like to know about?")
-answerWorker := NewAnswerNodeWorker(publisher, stateStore, mockLLM)
-watermillRouter.RegisterNodeWorker(questionWorker)
-watermillRouter.RegisterNodeWorker(answerWorker)
 
 // Register the flow
-orchestrator.RegisterFlow(qaFlow)
+flowID := "qa_flow_1"
+flowRegistry.RegisterFlow(flowID, qaFlow)
+```
 
-// Create and register a flow worker
-qaFlowWorker := event.NewGenericFlowWorker(
+#### 4. Set Up the System and Start the Flow
+
+Initialize the system components and execute your flow:
+
+```go
+// Create a generic flow worker for the QA flow
+qaFlowWorker := NewGenericFlowWorker(
     qaFlow.Type(),
     publisher,
     stateStore,
@@ -1757,75 +1939,24 @@ qaFlowWorker := event.NewGenericFlowWorker(
     orchestrator,
 )
 watermillRouter.RegisterFlowWorker(qaFlowWorker)
-```
 
-#### 4. Set Up Event Handlers
-
-Add handlers to process flow completion and progress updates:
-
-```go
-// Set up handler for flow.completed events
-watermillRouter.SetupFlowCompletionHandler(func(completed event.FlowCompletedMessage) error {
-    // Get the shared data to retrieve the results
-    sharedData, err := stateStore.GetSharedData(completed.FlowExecutionID)
-    if err != nil {
-        log.Error().Err(err).Msg("Error retrieving final results")
-        return nil
-    }
-    
-    // Log the question and answer
-    log.Info().
-        Interface("question", sharedData["user_answer"]).
-        Interface("answer", sharedData["llm_response"]).
-        Msg("Flow completed with results")
-        
+// Set up handler for flow completion
+watermillRouter.SetupFlowCompletionHandler(func(completed FlowCompletedMessage) error {
+    log.Info().Str("flowID", completed.FlowExecutionID).Msg("Flow completed successfully")
     return nil
 })
 
-// Set up handler for progress updates
-watermillRouter.SetupProgressHandler(func(progress event.ProgressUpdateMessage) error {
-    log.Info().
-        Str("status", progress.Status).
-        Float64("progress", progress.Progress).
-        Str("message", progress.Message).
-        Msg("Progress update")
-    return nil
-})
-```
-
-#### 5. Start the Router and Execute the Flow
-
-Finally, start the router and execute your flow:
-
-```go
-// Start the router in a goroutine
+// Start the router
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
+go watermillRouter.Start(ctx)
 
-go func() {
-    if err := watermillRouter.Start(ctx); err != nil {
-        log.Fatal().Err(err).Msg("Router error")
-    }
-}()
-
-// Prepare initial shared data
+// Start the flow with initial data
 initialData := map[string]interface{}{
     "started_at": time.Now().Format(time.RFC3339),
 }
-
-// Start the flow
-executionID := orchestrator.StartFlow(qaFlow.Type(), qaFlow.ID(), initialData)
-log.Info().Str("executionID", executionID).Msg("Flow started")
-
-// In a real application, you would wait for flow completion
-// For this example, we'll use a simple timeout
-time.Sleep(5 * time.Second)
-
-// Clean up
-err = watermillRouter.Stop()
-if err != nil {
-    log.Error().Err(err).Msg("Error stopping router")
-}
+executionID := orchestrator.StartFlow(qaFlow.Type(), flowID, initialData)
+log.Info().Str("executionID", executionID).Msg("QA Flow started")
 ```
 
 ### 11.2 Extending Your Agent's Capabilities
@@ -1834,87 +1965,174 @@ After implementing a basic question-answering agent, you can extend it with more
 
 #### Adding Memory for Multi-Turn Conversations
 
-Modify your shared data structure to store conversation history:
+Using NodeBuilder, we can easily add conversation history support:
 
 ```go
-// Initialize shared data with conversation history
-initialData := map[string]interface{}{
-    "started_at": time.Now().Format(time.RFC3339),
-    "conversation_history": []map[string]string{},
+// Create a memory-aware answer node
+memoryAnswerNode := NewNodeBuilder("answer_with_memory", publisher, stateStore).
+    WithParam("model", "gpt-4").
+    WithPrep(func(ctx NodeContext) (interface{}, error) {
+        // Get the user's question from shared data
+        userQuestion, ok := ctx.SharedData["question"].(string)
+        if !ok {
+            return nil, fmt.Errorf("user question not found in shared data")
+        }
+        
+        // Get conversation history from shared data
+        history, ok := ctx.SharedData["conversation_history"].([]map[string]string)
+        if !ok {
+            history = []map[string]string{}
+        }
+        
+        return map[string]interface{}{
+            "question": userQuestion,
+            "history": history,
+        }, nil
+    }).
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        data := prepResult.(map[string]interface{})
+        userQuestion := data["question"].(string)
+        history := data["history"].([]map[string]string)
+        
+        // Build a prompt that includes conversation history
+        var prompt strings.Builder
+        prompt.WriteString("Given the following conversation history:\n\n")
+        
+        for _, entry := range history {
+            prompt.WriteString(fmt.Sprintf("User: %s\n", entry["question"]))
+            prompt.WriteString(fmt.Sprintf("Assistant: %s\n\n", entry["answer"]))
+        }
+        
+        prompt.WriteString(fmt.Sprintf("User: %s\n", userQuestion))
+        prompt.WriteString("Assistant: ")
+        
+        // In a real implementation, call the actual LLM API
+        // For this example, we'll use a mock response
+        llmResponse := "PocketFlow helps you build sophisticated agents with memory and context!"
+        
+        return llmResponse, nil
+    }).
+    WithPost(func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+        data := prepResult.(map[string]interface{})
+        userQuestion := data["question"].(string)
+        history := data["history"].([]map[string]string)
+        llmResponse := execResult.(string)
+        
+        // Update conversation history
+        history = append(history, map[string]string{
+            "question": userQuestion,
+            "answer": llmResponse,
+        })
+        
+        // Store updated history in shared data
+        if err := ctx.StateStore.UpdateSharedData(ctx.FlowExecutionID, "conversation_history", history); err != nil {
+            return "", nil, err
+        }
+        
+        return "default", llmResponse, nil
+    }).
+    Build()
+```
+
+#### Adding Tool Use with SimpleNodeHandler
+
+Create a weather tool node using the SimpleNodeHandler interface:
+
+```go
+// WeatherToolHandler implements SimpleNodeHandler for weather API integration
+type WeatherToolHandler struct {
+    ApiKey string
 }
 
-// In your AnswerNodeWorker, update the history after each interaction
-func (w *AnswerNodeWorker) HandleMessage(msgObj interface{}) error {
-    // ... existing code ...
-    
-    // Update conversation history
-    history, ok := sharedData["conversation_history"].([]map[string]string)
+func (h *WeatherToolHandler) Prep(ctx NodeContext) (interface{}, error) {
+    // Get user query from shared data
+    userQuery, ok := ctx.SharedData["question"].(string)
     if !ok {
-        history = []map[string]string{}
+        return nil, fmt.Errorf("user question not found in shared data")
     }
     
-    history = append(history, map[string]string{
-        "question": userQuestion,
-        "answer": llmResponse,
-    })
-    
-    if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "conversation_history", history); err != nil {
-        return err
+    // Extract location from query
+    // In a real implementation, this might use an NLP model
+    location := "default_location"
+    if strings.Contains(strings.ToLower(userQuery), "weather in") {
+        parts := strings.Split(strings.ToLower(userQuery), "weather in")
+        if len(parts) > 1 {
+            location = strings.TrimSpace(parts[1])
+        }
     }
     
-    // ... rest of the code ...
+    return location, nil
+}
+
+func (h *WeatherToolHandler) Exec(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+    location := prepResult.(string)
+    
+    // In a real implementation, call an actual weather API
+    // For this example, we'll return mock data
+    weatherData := map[string]interface{}{
+        "location": location,
+        "temperature": 72,
+        "condition": "sunny",
+        "humidity": 45,
+    }
+    
+    return weatherData, nil
+}
+
+func (h *WeatherToolHandler) Post(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+    weatherData := execResult.(map[string]interface{})
+    
+    // Store weather data in shared state
+    if err := ctx.StateStore.UpdateSharedData(ctx.FlowExecutionID, "weather_data", weatherData); err != nil {
+        return "", nil, err
+    }
+    
+    return "default", weatherData, nil
 }
 ```
 
-#### Adding Tool Use
-
-Create a new node worker that can call external APIs or services:
+Then create an intent classifier to route the question to the right node:
 
 ```go
-// WeatherToolNodeWorker calls a weather API
-type WeatherToolNodeWorker struct {
-    Publisher  EventPublisher
-    StateStore StateStore
-    ApiKey     string
-}
-
-func (w *WeatherToolNodeWorker) NodeType() string {
-    return "weather_tool"
-}
-
-func (w *WeatherToolNodeWorker) HandleMessage(msgObj interface{}) error {
-    // ... message handling code ...
-    
-    // Extract location from user query
-    location := extractLocation(userQuery)
-    
-    // Call weather API
-    weatherData := callWeatherApi(location, w.ApiKey)
-    
-    // Store result in shared data
-    if err := w.StateStore.UpdateSharedData(execReq.FlowExecutionID, "weather_data", weatherData); err != nil {
-        return err
-    }
-    
-    // ... publish completion ...
-}
+// Create an intent classifier node using NodeBuilder
+intentClassifierNode := NewNodeBuilder("intent_classifier", publisher, stateStore).
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        // Get user question from shared data
+        userQuestion, ok := ctx.SharedData["question"].(string)
+        if !ok {
+            return nil, fmt.Errorf("user question not found in shared data")
+        }
+        
+        // Simple rule-based classifier
+        // In a real implementation, this would use an LLM or ML model
+        if strings.Contains(strings.ToLower(userQuestion), "weather") {
+            return "weather_intent", nil
+        }
+        
+        return "general_intent", nil
+    }).
+    WithPost(func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+        intent := execResult.(string)
+        return intent, intent, nil
+    }).
+    Build()
 ```
 
-Update your flow to include tool use:
+Finally, update your flow to include these nodes:
 
 ```go
-// Define nodes
-questionNode := NewNode("question", map[string]interface{}{})
-intentClassifierNode := NewNode("intent_classifier", map[string]interface{}{})
-weatherToolNode := NewNode("weather_tool", map[string]interface{}{})
-generalAnswerNode := NewNode("answer", map[string]interface{}{})
+// Define node definitions
+questionNodeDef := NewNode("question", map[string]interface{}{})
+intentClassifierNodeDef := NewNode("intent_classifier", map[string]interface{}{})
+weatherToolNodeDef := NewNode("weather_tool", map[string]interface{}{})
+answerNodeDef := NewNode("answer", map[string]interface{}{})
 
-// Build flow with branching based on intent
+// Build flow with intent-based branching
 agentFlow := NewFlowBuilder().
-    Begin(questionNode).
-    Then(intentClassifierNode).
-    On("weather_intent").Then(weatherToolNode).Then(generalAnswerNode).
-    On("general_intent").Then(generalAnswerNode).
+    Begin(questionNodeDef).
+    Then(intentClassifierNodeDef).
+    On("weather_intent").Then(weatherToolNodeDef).Then(answerNodeDef).
+    On("general_intent").Then(answerNodeDef).
     Build()
 ```
 

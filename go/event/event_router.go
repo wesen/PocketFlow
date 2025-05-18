@@ -38,6 +38,16 @@ func NewWatermillEventRouter(orchestrator *FlowOrchestrator) *WatermillEventRout
 	}
 
 	// We'll register middleware handlers here
+	// Add poison queue middleware to prevent infinite retries
+	router.AddMiddleware(PoisonQueueMiddleware(3))
+
+	// Add recovery middleware to catch panics
+	router.AddMiddleware(RecoveryMiddleware())
+
+	// Add logging middleware for detailed logs
+	router.AddMiddleware(LoggingMiddleware())
+
+	// Add basic message tracking middleware
 	router.AddMiddleware(
 		func(h message.HandlerFunc) message.HandlerFunc {
 			return func(msg *message.Message) ([]*message.Message, error) {
