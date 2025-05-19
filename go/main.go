@@ -12,6 +12,8 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event"
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
+	"github.com/The-Pocket/PocketFlow/go/event/examples/guardrail"
+	"github.com/The-Pocket/PocketFlow/go/event/examples/memory"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
 	"github.com/rs/zerolog"
@@ -20,7 +22,7 @@ import (
 
 func main() {
 	// Parse command-line flags
-	flowType := flag.String("flow", "basic", "Flow type to run (basic, qa, branching)")
+	flowType := flag.String("flow", "basic", "Flow type to run (basic, qa, branching, memory, guardrail)")
 	visualizeOnly := flag.Bool("visualize", false, "Only visualize the flow without running it")
 	flag.Parse()
 
@@ -79,6 +81,16 @@ func main() {
 	case "branching":
 		flowName = "Branching Intent Flow"
 		flow = branching.CreateBranchingFlow()
+		runner.RegisterFlow(flow)
+
+	case "memory":
+		flowName = "Chat Memory Flow"
+		flow = memory.CreateMemoryFlow()
+		runner.RegisterFlow(flow)
+
+	case "guardrail":
+		flowName = "Chat Guardrail Flow"
+		flow = guardrail.CreateGuardrailFlow()
 		runner.RegisterFlow(flow)
 
 	default:
