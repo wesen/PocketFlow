@@ -10,7 +10,7 @@ type nodeImpl struct {
 	id       string
 	nodeType string
 	name     string
-	params   map[string]interface{}
+	params   core.NodeParams
 }
 
 func (n *nodeImpl) ID() string {
@@ -25,12 +25,14 @@ func (n *nodeImpl) Name() string {
 	return n.name
 }
 
-func (n *nodeImpl) Params() map[string]interface{} {
+func (n *nodeImpl) Params() core.NodeParams {
 	return n.params
 }
 
 // NewNode creates a new Node instance
-func NewNode(nodeType string, params map[string]interface{}) core.Node {
+// Note: This function should typically not be used directly. 
+// Instead, use the NewNode method on NodeWorker instances.
+func NewNode(nodeType string, params core.NodeParams) core.Node {
 	return &nodeImpl{
 		id:       uuid.New().String(),
 		nodeType: nodeType,

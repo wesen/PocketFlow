@@ -50,13 +50,22 @@ func (w *GenericFlowWorker) SupportedMessageTypes() []string {
 func (w *GenericFlowWorker) HandleMessage(msgObj interface{}) error {
 	msg, ok := msgObj.(*message.Message)
 	if !ok {
+		log.Error().Msg("FlowWorker received invalid message type")
 		return fmt.Errorf("invalid message type")
 	}
 	
 	var base core.BaseMessage
 	if err := json.Unmarshal(msg.Payload, &base); err != nil {
+		log.Error().Err(err).Str("messageID", msg.UUID).Msg("FlowWorker failed to unmarshal base message")
 		return err
 	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("messageType", base.MessageType).
+		Str("flowExecutionID", base.FlowExecutionID).
+		Str("messageID", msg.UUID).
+		Msg("FlowWorker handling message")
 	
 	switch base.MessageType {
 	case core.MessageTypeFlowStartRequested:
@@ -71,8 +80,18 @@ func (w *GenericFlowWorker) HandleMessage(msgObj interface{}) error {
 		return w.handleFlowCancelRequested(msg)
 	case core.MessageTypeFlowCompleted, core.MessageTypeFlowFailed:
 		// Ignore flow completion and failure messages since we probably emitted it
+		log.Debug().
+			Str("flowType", w.FlowTypeName).
+			Str("messageType", base.MessageType).
+			Str("flowExecutionID", base.FlowExecutionID).
+			Msg("FlowWorker ignoring own completion/failure message")
 		return nil
 	default:
+		log.Warn().
+			Str("flowType", w.FlowTypeName).
+			Str("messageType", base.MessageType).
+			Str("flowExecutionID", base.FlowExecutionID).
+			Msg("FlowWorker received unsupported message type")
 		return fmt.Errorf("unsupported message type: %s", base.MessageType)
 	}
 }
@@ -80,34 +99,76 @@ func (w *GenericFlowWorker) HandleMessage(msgObj interface{}) error {
 func (w *GenericFlowWorker) HandleNodeCompletedMessage(msgObj interface{}) error {
 	msg, ok := msgObj.(*message.Message)
 	if !ok {
+		log.Error().Msg("FlowWorker received invalid message type for node completion")
 		return fmt.Errorf("invalid message type")
 	}
 	
 	var completed core.NodeCompletedMessage
 	if err := json.Unmarshal(msg.Payload, &completed); err != nil {
+		log.Error().Err(err).Str("messageID", msg.UUID).Msg("FlowWorker failed to unmarshal node completed message")
 		return err
 	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", completed.FlowExecutionID).
+		Str("nodeExecutionID", completed.NodeExecutionID).
+		Str("nodeType", completed.NodeType).
+		Str("nodeID", completed.NodeID).
+		Str("action", completed.Action).
+		Str("messageID", msg.UUID).
+		Msg("FlowWorker handling node completion")
 	
 	// Get flow definition from registry
 	flow, err := w.Registry.GetFlowByExecutionID(completed.FlowExecutionID)
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", completed.FlowExecutionID).
+			Msg("FlowWorker failed to get flow definition from registry")
 		return err
 	}
 	
 	// Only handle if flow type matches
 	if flow.Type() != w.FlowTypeName {
+		log.Debug().
+			Str("flowType", w.FlowTypeName).
+			Str("actualFlowType", flow.Type()).
+			Str("flowExecutionID", completed.FlowExecutionID).
+			Msg("FlowWorker ignoring node completion for different flow type")
 		return nil
 	}
 	
 	// Update shared data with node result
 	if err := w.StateStore.UpdateSharedData(completed.FlowExecutionID, completed.NodeID, completed.Result); err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", completed.FlowExecutionID).
+			Str("nodeID", completed.NodeID).
+			Msg("FlowWorker failed to update shared data with node result")
 		return err
 	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", completed.FlowExecutionID).
+		Str("nodeID", completed.NodeID).
+		Interface("result", completed.Result).
+		Msg("FlowWorker updated shared data with node result")
 	
 	// Find next node based on the action using the flow definition
 	nextNode, exists := flow.GetNextNode(completed.NodeID, completed.Action)
 	if !exists || nextNode == nil {
 		// Flow is complete
+		log.Debug().
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", completed.FlowExecutionID).
+			Str("currentNodeID", completed.NodeID).
+			Str("action", completed.Action).
+			Bool("exists", exists).
+			Msg("FlowWorker determined flow is complete - no next node found")
 		w.publishFlowCompletion(completed.FlowExecutionID, flow.Type(), completed.Action)
 		log.Info().Str("flowExecutionID", completed.FlowExecutionID).Msg("Flow completed")
 		return nil
@@ -115,8 +176,23 @@ func (w *GenericFlowWorker) HandleNodeCompletedMessage(msgObj interface{}) error
 	
 	// Start the next node
 	nodeExecID := uuid.New().String()
-	w.Publisher.Publish(
-		fmt.Sprintf("node.%s", nextNode.Type()),
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", completed.FlowExecutionID).
+		Str("currentNodeID", completed.NodeID).
+		Str("currentNodeType", completed.NodeType).
+		Str("action", completed.Action).
+		Str("nextNodeID", nextNode.ID()).
+		Str("nextNodeType", nextNode.Type()).
+		Str("nodeExecutionID", nodeExecID).
+		Interface("nextNodeParams", nextNode.Params()).
+		Msg("FlowWorker starting next node execution")
+	
+	topic := fmt.Sprintf("node.%s", nextNode.Type())
+	
+	err = w.Publisher.Publish(
+		topic,
 		core.ExecRequestedMessage{
 			BaseMessage: core.BaseMessage{
 				MessageType:     core.MessageTypeExecRequested,
@@ -130,6 +206,25 @@ func (w *GenericFlowWorker) HandleNodeCompletedMessage(msgObj interface{}) error
 		},
 	)
 	
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("topic", topic).
+			Str("nextNodeType", nextNode.Type()).
+			Str("flowExecutionID", completed.FlowExecutionID).
+			Msg("FlowWorker failed to publish exec request for next node")
+		return err
+	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("topic", topic).
+		Str("nextNodeType", nextNode.Type()).
+		Str("flowExecutionID", completed.FlowExecutionID).
+		Str("nodeExecutionID", nodeExecID).
+		Msg("FlowWorker successfully published exec request for next node")
+	
 	// Publish progress update
 	w.publishProgressUpdate(completed.FlowExecutionID, "node_transition", 0.5,
 		fmt.Sprintf("Moving from %s to %s", completed.NodeType, nextNode.Type()))
@@ -140,35 +235,85 @@ func (w *GenericFlowWorker) HandleNodeCompletedMessage(msgObj interface{}) error
 func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error {
 	var flowStart core.FlowStartRequestedMessage
 	if err := json.Unmarshal(msg.Payload, &flowStart); err != nil {
+		log.Error().Err(err).Str("messageID", msg.UUID).Msg("FlowWorker failed to unmarshal flow start message")
 		return err
 	}
 	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("requestedFlowType", flowStart.FlowType).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Str("flowDefinitionID", flowStart.FlowDefinitionID).
+		Interface("initialSharedData", flowStart.InitialSharedData).
+		Str("messageID", msg.UUID).
+		Msg("FlowWorker received flow start request")
+	
 	// Only handle if flow type matches
 	if flowStart.FlowType != w.FlowTypeName {
+		log.Debug().
+			Str("flowType", w.FlowTypeName).
+			Str("requestedFlowType", flowStart.FlowType).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Msg("FlowWorker ignoring flow start for different flow type")
 		return nil
 	}
 	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Msg("FlowWorker processing flow start request")
+	
 	// Store the initial shared data
 	if err := w.StateStore.StoreSharedData(flowStart.FlowExecutionID, flowStart.InitialSharedData); err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Msg("FlowWorker failed to store initial shared data")
 		return w.handleFlowInitializationError(flowStart, err)
 	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Interface("initialSharedData", flowStart.InitialSharedData).
+		Msg("FlowWorker stored initial shared data")
 	
 	// Get flow definition
 	flow, err := w.Registry.GetFlow(flowStart.FlowDefinitionID)
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Str("flowDefinitionID", flowStart.FlowDefinitionID).
+			Msg("FlowWorker failed to get flow definition from registry")
 		return w.handleFlowInitializationError(flowStart, err)
 	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Str("flowDefinitionID", flowStart.FlowDefinitionID).
+		Str("flowName", flow.Name()).
+		Msg("FlowWorker retrieved flow definition")
 	
 	// Map execution ID to flow definition ID
 	if mapExec, ok := w.Registry.(interface{
 		MapExecutionToFlow(string, string)
 	}); ok {
 		mapExec.MapExecutionToFlow(flowStart.FlowExecutionID, flowStart.FlowDefinitionID)
+		log.Debug().
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Str("flowDefinitionID", flowStart.FlowDefinitionID).
+			Msg("FlowWorker mapped execution ID to flow definition ID")
 	}
 	
 	// Publish flow initialized event
-	w.Publisher.Publish(
-		fmt.Sprintf("flow.%s", w.FlowTypeName),
+	initTopic := fmt.Sprintf("flow.%s", w.FlowTypeName)
+	err = w.Publisher.Publish(
+		initTopic,
 		core.FlowInitializedMessage{
 			BaseMessage: core.BaseMessage{
 				MessageType:     core.MessageTypeFlowInitialized,
@@ -180,6 +325,22 @@ func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error
 		},
 	)
 	
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("topic", initTopic).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Msg("FlowWorker failed to publish flow initialized message")
+		return w.handleFlowInitializationError(flowStart, err)
+	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("topic", initTopic).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Msg("FlowWorker published flow initialized message")
+	
 	// Publish initial progress update
 	w.publishProgressUpdate(flowStart.FlowExecutionID, "flow_started", 0.0,
 		fmt.Sprintf("Starting flow of type %s", w.FlowTypeName))
@@ -187,13 +348,37 @@ func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error
 	// Get the start node
 	startNode := flow.StartNode()
 	if startNode == nil {
+		log.Error().
+			Str("flowType", w.FlowTypeName).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Str("flowDefinitionID", flowStart.FlowDefinitionID).
+			Msg("FlowWorker found flow has no start node")
 		return w.handleFlowInitializationError(flowStart, fmt.Errorf("flow has no start node"))
 	}
 	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Str("startNodeID", startNode.ID()).
+		Str("startNodeType", startNode.Type()).
+		Interface("startNodeParams", startNode.Params()).
+		Msg("FlowWorker found start node")
+	
 	// Start the first node
 	nodeExecID := uuid.New().String()
-	w.Publisher.Publish(
-		fmt.Sprintf("node.%s", startNode.Type()),
+	startNodeTopic := fmt.Sprintf("node.%s", startNode.Type())
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Str("startNodeID", startNode.ID()).
+		Str("startNodeType", startNode.Type()).
+		Str("nodeExecutionID", nodeExecID).
+		Str("topic", startNodeTopic).
+		Msg("FlowWorker starting first node execution")
+	
+	err = w.Publisher.Publish(
+		startNodeTopic,
 		core.ExecRequestedMessage{
 			BaseMessage: core.BaseMessage{
 				MessageType:     core.MessageTypeExecRequested,
@@ -206,6 +391,25 @@ func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error
 			Params:   startNode.Params(),
 		},
 	)
+	
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("flowType", w.FlowTypeName).
+			Str("topic", startNodeTopic).
+			Str("startNodeType", startNode.Type()).
+			Str("flowExecutionID", flowStart.FlowExecutionID).
+			Msg("FlowWorker failed to publish exec request for start node")
+		return w.handleFlowInitializationError(flowStart, err)
+	}
+	
+	log.Debug().
+		Str("flowType", w.FlowTypeName).
+		Str("topic", startNodeTopic).
+		Str("startNodeType", startNode.Type()).
+		Str("flowExecutionID", flowStart.FlowExecutionID).
+		Str("nodeExecutionID", nodeExecID).
+		Msg("FlowWorker successfully published exec request for start node")
 	
 	return nil
 }

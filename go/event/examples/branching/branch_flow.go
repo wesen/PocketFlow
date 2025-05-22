@@ -186,23 +186,23 @@ func (h *GeneralHandler) Post(ctx core.NodeContext, prepResult, execResult inter
 // CreateBranchingFlow creates a flow with branches based on intent
 func CreateBranchingFlow() core.Flow {
 	// Define node definitions
-	inputNode := impl.NewNode("user_input", map[string]interface{}{
+	inputNode := impl.NewNode("user_input", core.NodeParams{
 		"prompt": "What would you like to know?",
 	})
-	intentClassifierNode := impl.NewNode("intent_classifier", map[string]interface{}{})
-	weatherNode := impl.NewNode("weather", map[string]interface{}{})
-	timeNode := impl.NewNode("time", map[string]interface{}{})
-	helpNode := impl.NewNode("help", map[string]interface{}{})
-	generalNode := impl.NewNode("general", map[string]interface{}{})
+	intentClassifierNode := impl.NewNode("intent_classifier", core.NodeParams{})
+	weatherNode := impl.NewNode("weather", core.NodeParams{})
+	timeNode := impl.NewNode("time", core.NodeParams{})
+	helpNode := impl.NewNode("help", core.NodeParams{})
+	generalNode := impl.NewNode("general", core.NodeParams{})
 
 	// Define flow using builder pattern with branching
 	branchingFlow := impl.NewFlowBuilder("branching").
 		Begin(inputNode).
 		Then(intentClassifierNode).
-		On("weather_intent").Then(weatherNode).
-		On("time_intent").Then(timeNode).
-		On("help_intent").Then(helpNode).
-		On("general_intent").Then(generalNode).
+		On("weather_intent", weatherNode).
+		On("time_intent", timeNode).
+		On("help_intent", helpNode).
+		On("general_intent", generalNode).
 		Build()
 
 	return branchingFlow

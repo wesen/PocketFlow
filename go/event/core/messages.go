@@ -89,9 +89,9 @@ type FlowFailedMessage struct {
 // Message sent to request node execution
 type ExecRequestedMessage struct {
 	BaseMessage
-	NodeType string                 `json:"node_type"`
-	NodeID   string                 `json:"node_id"`
-	Params   map[string]interface{} `json:"params,omitempty"`
+	NodeType string     `json:"node_type"`
+	NodeID   string     `json:"node_id"`
+	Params   NodeParams `json:"params,omitempty"`
 }
 
 // Message sent after node completes execution

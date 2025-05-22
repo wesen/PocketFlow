@@ -8,7 +8,7 @@ import (
 type nodeBuilderImpl struct {
 	nodeType  string
 	name      string
-	params    map[string]interface{}
+	params    core.NodeParams
 	prepFn    func(ctx core.NodeContext) (interface{}, error)
 	execFn    func(ctx core.NodeContext, prepResult interface{}) (interface{}, error)
 	postFn    func(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
@@ -58,7 +58,7 @@ func NewNodeBuilder(nodeType string, publisher core.EventPublisher, store core.S
 	return &nodeBuilderImpl{
 		nodeType:  nodeType,
 		name:      nodeType, // Default name is the type
-		params:    make(map[string]interface{}),
+		params:    make(core.NodeParams),
 		prepFn:    defaultPrepFn,
 		execFn:    defaultExecFn,
 		postFn:    defaultPostFn,
@@ -115,5 +115,8 @@ func (b *nodeBuilderImpl) Build() core.NodeWorker {
 	}
 	
 	// Create a SimpleNode with the handler
-	return NewSimpleNode(b.nodeType, handler, b.publisher, b.store)
+	simpleNode := NewSimpleNode(b.nodeType, handler, b.publisher, b.store)
+	
+	// Return the node worker - it implements the NewNode method through SimpleNode
+	return simpleNode
 }

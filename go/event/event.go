@@ -23,6 +23,7 @@ type (
 	FlowRegistry    = core.FlowRegistry
 	SimpleNodeHandler = core.SimpleNodeHandler
 	NodeBuilder     = core.NodeBuilder
+	NodeParams      = core.NodeParams
 	
 	// Messages
 	BaseMessage = core.BaseMessage
@@ -57,8 +58,7 @@ const (
 
 // Re-export implementation methods from impl package
 var (
-	// Node and Flow factory methods
-	NewNode = impl.NewNode
+	// Flow factory methods
 	NewFlowBuilder = impl.NewFlowBuilder
 	
 	// State and Registry factory methods

@@ -44,19 +44,27 @@ go run main.go --flow=branching --visualize
 
 To create a custom flow, you'll need to:
 
-1. Define the nodes using the `impl.NewNode()` function
-2. Connect them using the `impl.NewFlowBuilder()` builder
-3. Create node workers for each node type
-4. Register the flow and workers with the system
+1. Create node workers for each node type
+2. Register the node workers with the runner
+3. Define the nodes using the node workers' `NewNode()` method
+4. Connect them using the `impl.NewFlowBuilder()` builder
+5. Register the flow with the runner
 
 Here's a simple example:
 
 ```go
-// Define nodes
-greetingNode := impl.NewNode("greeting", map[string]interface{}{
+// Create node workers first
+greetingWorker := event.NewGreetingNodeWorker(publisher, stateStore)
+farewellWorker := event.NewFarewellNodeWorker(publisher, stateStore)
+
+// Register workers with the runner
+runner.RegisterNodeWorkers(greetingWorker, farewellWorker)
+
+// Define nodes using the node workers
+greetingNode := greetingWorker.NewNode(event.NodeParams{
     "message": "Hello, world!",
 })
-farewellNode := impl.NewNode("farewell", map[string]interface{}{
+farewellNode := farewellWorker.NewNode(event.NodeParams{
     "message": "Goodbye, world!",
 })
 

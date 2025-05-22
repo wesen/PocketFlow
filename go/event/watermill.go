@@ -36,12 +36,51 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 	// Marshal the event to JSON
 	payload, err := json.Marshal(event)
 	if err != nil {
+		log.Error().Err(err).Str("topic", topic).Msg("Publisher failed to marshal message")
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	msg := message.NewMessage(watermill.NewUUID(), payload)
+	messageUUID := watermill.NewUUID()
+	msg := message.NewMessage(messageUUID, payload)
+	
+	// Extract message type for logging
+	var messageType string
+	if baseMsg, ok := event.(interface{ GetMessageType() string }); ok {
+		messageType = baseMsg.GetMessageType()
+	} else {
+		// Try to extract from BaseMessage fields
+		if jsonMap := make(map[string]interface{}); json.Unmarshal(payload, &jsonMap) == nil {
+			if mt, exists := jsonMap["message_type"]; exists {
+				messageType = fmt.Sprintf("%v", mt)
+			}
+		}
+	}
 
-	return p.pubSub.Publish(topic, msg)
+	log.Debug().
+		Str("topic", topic).
+		Str("messageType", messageType).
+		Str("messageID", messageUUID).
+		Interface("event", event).
+		Msg("Publisher publishing message")
+
+	err = p.pubSub.Publish(topic, msg)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("topic", topic).
+			Str("messageType", messageType).
+			Str("messageID", messageUUID).
+			Msg("Publisher failed to publish message")
+		return err
+	}
+	
+	log.Debug().
+		Str("topic", topic).
+		Str("messageType", messageType).
+		Str("messageID", messageUUID).
+		Msg("Publisher successfully published message")
+
+	return nil
 }
 
 // NewWatermillEventRouter creates a new router using Watermill
@@ -89,22 +128,50 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 	r.NodeWorkers[nodeType] = worker
 
 	// Subscribe to the node's topic
+	topic := fmt.Sprintf("node.%s", nodeType)
+	handlerName := fmt.Sprintf("handle_%s_node", nodeType)
+	
 	r.Router.AddHandler(
-		fmt.Sprintf("handle_%s_node", nodeType),
-		fmt.Sprintf("node.%s", nodeType),
+		handlerName,
+		topic,
 		r.PubSub,
 		"node.responses", // Unused but required by Watermill
 		r.PubSub,
 		func(msg *message.Message) ([]*message.Message, error) {
+			log.Debug().
+				Str("handlerName", handlerName).
+				Str("topic", topic).
+				Str("nodeType", nodeType).
+				Str("messageID", msg.UUID).
+				Msg("Router received message for node worker")
+			
 			if err := worker.HandleMessage(msg); err != nil {
-				log.Error().Err(err).Str("nodeType", nodeType).Msg("Error handling node message")
+				log.Error().
+					Err(err).
+					Str("handlerName", handlerName).
+					Str("topic", topic).
+					Str("nodeType", nodeType).
+					Str("messageID", msg.UUID).
+					Msg("Router error handling node message")
 				return nil, err
 			}
+			
+			log.Debug().
+				Str("handlerName", handlerName).
+				Str("topic", topic).
+				Str("nodeType", nodeType).
+				Str("messageID", msg.UUID).
+				Msg("Router successfully handled node message")
+				
 			return nil, nil
 		},
 	)
 
-	log.Info().Str("nodeType", nodeType).Msg("Registered node worker")
+	log.Info().
+		Str("nodeType", nodeType).
+		Str("topic", topic).
+		Str("handlerName", handlerName).
+		Msg("Registered node worker")
 }
 
 // RegisterAllNodeWorkers registers multiple node workers
@@ -120,38 +187,91 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	r.FlowWorkers[flowType] = worker
 
 	// Subscribe to the flow's topic
+	flowTopic := fmt.Sprintf("flow.%s", flowType)
+	flowHandlerName := fmt.Sprintf("handle_%s_flow", flowType)
+	
 	r.Router.AddHandler(
-		fmt.Sprintf("handle_%s_flow", flowType),
-		fmt.Sprintf("flow.%s", flowType),
+		flowHandlerName,
+		flowTopic,
 		r.PubSub,
 		"flow.responses", // Unused but required by Watermill
 		r.PubSub,
 		func(msg *message.Message) ([]*message.Message, error) {
+			log.Debug().
+				Str("handlerName", flowHandlerName).
+				Str("topic", flowTopic).
+				Str("flowType", flowType).
+				Str("messageID", msg.UUID).
+				Msg("Router received message for flow worker")
+			
 			if err := worker.HandleMessage(msg); err != nil {
-				log.Error().Err(err).Str("flowType", flowType).Msg("Error handling flow message")
+				log.Error().
+					Err(err).
+					Str("handlerName", flowHandlerName).
+					Str("topic", flowTopic).
+					Str("flowType", flowType).
+					Str("messageID", msg.UUID).
+					Msg("Router error handling flow message")
 				return nil, err
 			}
+			
+			log.Debug().
+				Str("handlerName", flowHandlerName).
+				Str("topic", flowTopic).
+				Str("flowType", flowType).
+				Str("messageID", msg.UUID).
+				Msg("Router successfully handled flow message")
+				
 			return nil, nil
 		},
 	)
 
 	// Also subscribe the flow worker to node.completed events
+	nodeCompletedHandlerName := fmt.Sprintf("handle_%s_node_completed", flowType)
+	nodeCompletedTopic := "node.completed"
+	
 	r.Router.AddHandler(
-		fmt.Sprintf("handle_%s_node_completed", flowType),
-		"node.completed",
+		nodeCompletedHandlerName,
+		nodeCompletedTopic,
 		r.PubSub,
 		"node.completed.responses", // Unused but required by Watermill
 		r.PubSub,
 		func(msg *message.Message) ([]*message.Message, error) {
+			log.Debug().
+				Str("handlerName", nodeCompletedHandlerName).
+				Str("topic", nodeCompletedTopic).
+				Str("flowType", flowType).
+				Str("messageID", msg.UUID).
+				Msg("Router received node completion message for flow worker")
+			
 			if err := worker.HandleNodeCompletedMessage(msg); err != nil {
-				log.Error().Err(err).Str("flowType", flowType).Msg("Error handling node completion")
+				log.Error().
+					Err(err).
+					Str("handlerName", nodeCompletedHandlerName).
+					Str("topic", nodeCompletedTopic).
+					Str("flowType", flowType).
+					Str("messageID", msg.UUID).
+					Msg("Router error handling node completion")
 				return nil, err
 			}
+			
+			log.Debug().
+				Str("handlerName", nodeCompletedHandlerName).
+				Str("topic", nodeCompletedTopic).
+				Str("flowType", flowType).
+				Str("messageID", msg.UUID).
+				Msg("Router successfully handled node completion message")
+				
 			return nil, nil
 		},
 	)
 
-	log.Info().Str("flowType", flowType).Msg("Registered flow worker")
+	log.Info().
+		Str("flowType", flowType).
+		Str("flowTopic", flowTopic).
+		Str("flowHandlerName", flowHandlerName).
+		Str("nodeCompletedHandlerName", nodeCompletedHandlerName).
+		Msg("Registered flow worker")
 }
 
 // SetupFlowCompletionHandler sets up a handler for flow completed events

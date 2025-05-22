@@ -127,10 +127,10 @@ func (h *AnswerHandler) Post(ctx core.NodeContext, prepResult, execResult interf
 // CreateQAFlow creates a simple question-answering flow
 func CreateQAFlow() core.Flow {
 	// Define node definitions
-	questionNodeDef := impl.NewNode("question", map[string]interface{}{
+	questionNodeDef := impl.NewNode("question", core.NodeParams{
 		"prompt": "What would you like to know about?",
 	})
-	answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
+	answerNodeDef := impl.NewNode("answer", core.NodeParams{})
 
 	// Define flow using builder pattern
 	qaFlow := impl.NewFlowBuilder("qa_chain").

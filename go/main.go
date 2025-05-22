@@ -127,7 +127,11 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 
 	// Create node workers
 	log.Debug().Msg("Creating node workers")
-	questionNode := event.NewQuestionNodeWorker(runner.Publisher(), runner.StateStore(), "What is your question?")
+	questionNode := event.NewQuestionNodeWorker(
+		runner.Publisher(),
+		runner.StateStore(),
+		"What is your question?",
+	)
 	answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
 	log.Info().Msg("Node workers created")
 
@@ -137,10 +141,10 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 
 	// Define nodes for the flow
 	log.Debug().Msg("Creating nodes for test flow")
-	questionNodeDef := impl.NewNode("question", map[string]interface{}{
+	questionNodeDef := questionNode.NewNode(event.NodeParams{
 		"question": "What would you like to know about?",
 	})
-	answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
+	answerNodeDef := answerNode.NewNode(event.NodeParams{})
 
 	// Define the flow
 	log.Debug().Msg("Defining test flow with builder pattern")

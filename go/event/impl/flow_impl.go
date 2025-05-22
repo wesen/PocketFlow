@@ -63,14 +63,14 @@ func (f *flowDefinition) GetNextNode(currentNodeID, action string) (core.Node, b
 
 func (f *flowDefinition) Visualize() string {
 	var sb strings.Builder
-	
+
 	sb.WriteString("flowchart TD\n")
-	
+
 	// Add nodes
 	for _, node := range f.nodes {
 		sb.WriteString(fmt.Sprintf("    %s[%s]\n", node.ID(), node.Name()))
 	}
-	
+
 	// Add transitions
 	for sourceID, actions := range f.transitions {
 		for action, targetID := range actions {
@@ -80,12 +80,12 @@ func (f *flowDefinition) Visualize() string {
 			} else {
 				label = "|" + label + "|"
 			}
-			
+
 			sb.WriteString(fmt.Sprintf("    %s -->%s %s\n",
 				sourceID, label, targetID))
 		}
 	}
-	
+
 	return sb.String()
 }
 
@@ -109,42 +109,57 @@ type flowBuilderImpl struct {
 func (b *flowBuilderImpl) Begin(node core.Node) core.FlowBuilder {
 	// Add the node to the flow
 	b.flow.nodes[node.ID()] = node
-	
+
 	// Set this as the start node
 	b.flow.startNode = node
-	
+
 	// Set as current node for chaining
 	b.currentNode = node
-	
+
 	return b
 }
 
 func (b *flowBuilderImpl) Then(node core.Node) core.FlowBuilder {
 	// Add the node to the flow
 	b.flow.nodes[node.ID()] = node
-	
+
 	// Add a default transition from current node to this node
 	if b.currentNode != nil {
 		// Initialize transitions map for the current node if needed
 		if _, exists := b.flow.transitions[b.currentNode.ID()]; !exists {
 			b.flow.transitions[b.currentNode.ID()] = make(map[string]string)
 		}
-		
+
 		// Add default transition
 		b.flow.transitions[b.currentNode.ID()]["default"] = node.ID()
 	}
-	
+
 	// Set as current node for chaining
 	b.currentNode = node
-	
+
 	return b
 }
 
-func (b *flowBuilderImpl) On(action string) core.TransitionBuilder {
-	return &transitionBuilderImpl{
-		flowBuilder: b,
-		action:      action,
+func (b *flowBuilderImpl) On(action string, targetNode core.Node) core.FlowBuilder {
+	// Check if we have a current node
+	if b.currentNode == nil {
+		panic("On() called before establishing a current node with Begin() or From()")
 	}
+
+	// Add the targetNode to the flow
+	b.flow.nodes[targetNode.ID()] = targetNode
+
+	// Initialize transitions map for the current node if needed
+	if _, exists := b.flow.transitions[b.currentNode.ID()]; !exists {
+		b.flow.transitions[b.currentNode.ID()] = make(map[string]string)
+	}
+
+	// Add the action-specific transition
+	b.flow.transitions[b.currentNode.ID()][action] = targetNode.ID()
+
+	// Do NOT change b.currentNode - this allows multiple On() calls to branch from same node
+
+	return b
 }
 
 func (b *flowBuilderImpl) From(node core.Node) core.FlowBuilder {
@@ -154,41 +169,14 @@ func (b *flowBuilderImpl) From(node core.Node) core.FlowBuilder {
 		// If not, add it
 		b.flow.nodes[node.ID()] = node
 	}
-	
+
 	b.currentNode = node
-	
+
 	return b
 }
 
 func (b *flowBuilderImpl) Build() core.Flow {
 	return b.flow
-}
-
-// transitionBuilderImpl implements the TransitionBuilder interface
-type transitionBuilderImpl struct {
-	flowBuilder *flowBuilderImpl
-	action      string
-}
-
-func (t *transitionBuilderImpl) Then(node core.Node) core.FlowBuilder {
-	// Add the node to the flow
-	t.flowBuilder.flow.nodes[node.ID()] = node
-	
-	// Add a transition from current node to this node for the specified action
-	if t.flowBuilder.currentNode != nil {
-		// Initialize transitions map for the current node if needed
-		if _, exists := t.flowBuilder.flow.transitions[t.flowBuilder.currentNode.ID()]; !exists {
-			t.flowBuilder.flow.transitions[t.flowBuilder.currentNode.ID()] = make(map[string]string)
-		}
-		
-		// Add action-specific transition
-		t.flowBuilder.flow.transitions[t.flowBuilder.currentNode.ID()][t.action] = node.ID()
-	}
-	
-	// Set as current node for chaining
-	t.flowBuilder.currentNode = node
-	
-	return t.flowBuilder
 }
 
 // NewFlowBuilder creates a new FlowBuilder instance

@@ -1,7 +1,8 @@
 // Package core provides the foundational interfaces for PocketFlow
 package core
 
-import ()
+// NodeParams represents the parameters for a node instance
+type NodeParams map[string]interface{}
 
 // Node interface represents a node in a flow
 type Node interface {
@@ -12,7 +13,7 @@ type Node interface {
 	// Get the display name of this node
 	Name() string
 	// Get the parameters for this node
-	Params() map[string]interface{}
+	Params() NodeParams
 }
 
 // Flow interface represents a flow definition
@@ -37,8 +38,10 @@ type Flow interface {
 type NodeWorker interface {
 	// Get the type of node this worker handles
 	NodeType() string
+
 	// Get the list of message types this worker can handle
 	SupportedMessageTypes() []string
+
 	// Handle a message
 	HandleMessage(msg interface{}) error
 
@@ -47,6 +50,8 @@ type NodeWorker interface {
 	HandleExecRequested(event NodeExecRequested)
 	HandlePostRequested(event NodePostRequested)
 	HandleExecFailed(event NodeExecFailed)
+
+	NewNode(params NodeParams) Node
 }
 
 // FlowWorker interface for flow workers
@@ -67,18 +72,12 @@ type FlowBuilder interface {
 	Begin(node Node) FlowBuilder
 	// Then creates a default transition from the previous node
 	Then(node Node) FlowBuilder
-	// On defines an action-based transition from the previous node
-	On(action string) TransitionBuilder
+	// On defines an action-based transition from the current node to the specified target node
+	On(action string, targetNode Node) FlowBuilder
 	// From switches the source node for subsequent transitions
 	From(node Node) FlowBuilder
 	// Build finalizes the flow definition
 	Build() Flow
-}
-
-// TransitionBuilder defines what happens for a specific action
-type TransitionBuilder interface {
-	// Then sets the destination node for this action
-	Then(node Node) FlowBuilder
 }
 
 // EventPublisher interface for publishing events
@@ -131,7 +130,7 @@ type NodeContext struct {
 	NodeExecutionID string
 	NodeID          string
 	NodeType        string
-	Params          map[string]interface{}
+	Params          NodeParams
 	SharedData      map[string]interface{}
 	StateStore      StateStore
 }
