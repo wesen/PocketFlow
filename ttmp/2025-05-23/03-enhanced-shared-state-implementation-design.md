@@ -24,20 +24,12 @@ type StateStore interface {
     GetTyped[T any](key string) (T, error)
     SetSemantic(key string, value interface{}) error
     
-    // Type-based querying
-    FindByType[T any]() ([]T, bool)
-    FindLatestByType[T any]() (T, bool)
-    
-    // Tag-based access
-    FindByTag(tag string) []interface{}
-    FindByTags(tags []string) []interface{}
-    
     // Metadata access
     GetMetadata(key string) (*DataMetadata, bool)
     GetAllMetadata() map[string]DataMetadata
     
     // Update with semantic registration
-    UpdateWithSemantic(flowExecutionID, nodeID string, value interface{}, semanticKeys []string, tags []string) error
+    UpdateWithSemantic(flowExecutionID, nodeID string, value interface{}, semanticKeys []string) error
     
     // Core state operations
     GetSharedData(flowExecutionID string) (map[string]interface{}, error)
@@ -63,12 +55,6 @@ type DataMetadata struct {
 type LayeredSharedState struct {
     // Layer 1: Semantic mappings
     SemanticLayer map[string]interface{} // semantic_key -> value
-    
-    // Layer 2: Type collections  
-    TypedCollections map[reflect.Type][]TypedValue // type -> []values
-    
-    // Layer 3: Tag-based access
-    TaggedData map[string][]string // tag -> []semantic_keys
     
     // Layer 4: Metadata
     Metadata map[string]DataMetadata // semantic_key -> metadata
@@ -98,39 +84,7 @@ type NodeContext struct {
     Params          map[string]interface{}
     
     // Semantic state access
-    StateQuery   *StateQuery
     SemanticData *SemanticDataAccessor
-}
-
-// Query helper for flexible data access
-type StateQuery struct {
-    store StateStore
-}
-
-func (sq *StateQuery) GetBySemantic(key string) (interface{}, bool) {
-    return sq.store.GetBySemantic(key)
-}
-
-func (sq *StateQuery) GetTyped[T any](key string) (T, error) {
-    return sq.store.GetTyped[T](key)
-}
-
-func (sq *StateQuery) FindByType[T any]() ([]T, bool) {
-    return sq.store.FindByType[T]()
-}
-
-func (sq *StateQuery) FindString(filter func(string) bool) (string, bool) {
-    strings, found := sq.FindByType[string]()
-    if !found {
-        return "", false
-    }
-    
-    for _, s := range strings {
-        if filter(s) {
-            return s, true
-        }
-    }
-    return "", false
 }
 
 // Semantic accessor with convenience methods
@@ -177,58 +131,31 @@ type NodeHandler interface {
 
 ### Phase 1: Core Infrastructure
 1. Implement `LayeredStateStore` with semantic-first design
-2. Create `StateQuery` and `SemanticDataAccessor` helpers
+2. Create `SemanticDataAccessor` helpers
 3. Build `NodeContext` with clean semantic access
 4. Add comprehensive tests for all new functionality
 
 ### Phase 2: Worker Support
-1. Create `NodeWorker` for semantic handlers
+1. Update `NodeWorker` 
 2. Add automatic semantic registration in worker execution
 3. Create factory methods for semantic contexts and flows
 
 ### Phase 3: Migration and Examples
 1. Convert branching example to semantic patterns
-2. Create migration utilities and documentation
-3. Performance testing and optimization
 
 ## Code Patterns
 ```go
 // Type-safe semantic access
 func (h *WeatherHandler) Prep(ctx NodeContext) (interface{}, error) {
-    userInput, err := ctx.StateQuery.GetTyped[string]("user_input")
-    if err != nil {
-        return nil, err
-    }
-    return userInput, nil
-}
-
-// Convenience methods for common data
-func (h *ChatHandler) Prep(ctx NodeContext) (interface{}, error) {
     userInput, err := ctx.SemanticData.UserInput()
     if err != nil {
         return nil, err
     }
     return userInput, nil
 }
-
-// Flexible querying for complex scenarios
-func (h *AggregatorHandler) Prep(ctx NodeContext) (interface{}, error) {
-    // Find all numeric values for aggregation
-    numbers := ctx.StateQuery.FindByTags([]string{"numeric", "metric"})
-    return numbers, nil
-}
 ```
 
 ## File Changes Required
-
-### New Files
-- `go/event/core/semantic_state.go` - Semantic interfaces and types
-- `go/event/impl/layered_state_store.go` - Semantic-first state implementation
-- `go/event/impl/semantic_node_worker.go` - Semantic worker support
-- `go/event/impl/state_query.go` - Query helper implementations
-- `go/event/examples/branching/semantic_branch_flow.go` - Clean semantic examples
-
-## Migration Examples
 
 ### Branching Flow Migration
 
@@ -279,12 +206,3 @@ func (h *WeatherHandler) DeclareOutputs() []SemanticOutput {
     }
 }
 ```
-
-## Benefits Achieved
-
-1. **Eliminated Fragile Code**: No more brittle iteration and string filtering
-2. **Type Safety**: Compile-time checking prevents runtime errors
-3. **Semantic Clarity**: Clear intent with `ctx.SemanticData.UserInput()`
-4. **Better Performance**: O(1) semantic lookups vs O(n) iteration
-5. **Rich Metadata**: Self-documenting code with semantic output declarations
-6. **Maintainable**: Changes to data structure don't break access patterns
