@@ -27,17 +27,20 @@ func main() {
 	observabilityVerbose := flag.Bool("observability-verbose", false, "Enable verbose observability output (implies -observability)")
 	webUI := flag.Bool("web", false, "Start web UI server instead of running flows directly")
 	webPort := flag.Int("web-port", 8080, "Port for web UI server")
+	useRedis := flag.Bool("redis", true, "Use Redis Streams for messaging (default: true)")
+	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis address (default: localhost:6379)")
 	
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nPocketFlow Go - Event-driven LLM application framework\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
-		fmt.Fprintf(os.Stderr, "  %s -flow basic                    # Run basic QA flow\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -flow basic                    # Run basic QA flow with Redis\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -flow qa -observability        # Run QA flow with observability\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -flow branching -observability-verbose  # Run branching flow with verbose tracing\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -visualize -flow basic         # Just show the flow diagram\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -web                           # Start web UI server on port 8080\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s -web -web-port 3000            # Start web UI server on port 3000\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -redis=false -flow basic       # Run with in-memory messaging\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -redis-addr redis:6379 -flow basic  # Run with custom Redis address\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
@@ -49,7 +52,7 @@ func main() {
 		Out:        os.Stdout,
 		TimeFormat: time.RFC3339,
 		NoColor:    false,
-	})
+	}).With().Caller().Logger()
 	log.Logger = zerolog
 
 	// Check if observability should be enabled
@@ -57,7 +60,7 @@ func main() {
 	
 	// If web UI is requested, start the web server
 	if *webUI {
-		if err := startWebServer(*webPort); err != nil {
+		if err := startWebServer(*webPort, *useRedis, *redisAddr); err != nil {
 			log.Fatal().Err(err).Msg("Web server failed to start")
 		}
 		return
@@ -83,9 +86,19 @@ func main() {
 		return nil
 	}
 
-	runner := event.NewRunner(event.WithDebugMode(true),
-		event.WithFlowCompletedHandler(completionHandler),
-	)
+	// Create runner with Redis or in-memory messaging
+	var runner *event.Runner
+	if *useRedis {
+		log.Info().Str("redisAddr", *redisAddr).Msg("🔗 Using Redis Streams for messaging")
+		runner = event.NewRunnerWithRedis(*redisAddr, event.WithDebugMode(true),
+			event.WithFlowCompletedHandler(completionHandler),
+		)
+	} else {
+		log.Info().Msg("💾 Using in-memory messaging")
+		runner = event.NewRunner(event.WithDebugMode(true),
+			event.WithFlowCompletedHandler(completionHandler),
+		)
+	}
 
 	// Initialize the runner
 	if err := runner.Init(); err != nil {
@@ -99,7 +112,20 @@ func main() {
 		log.Info().Msg("🔍 Setting up observability...")
 		
 		// Create observability manager with the runner's subscriber
-		obsManager = event.NewObservabilityManager(runner.Subscriber())
+		if *useRedis {
+			// For Redis, create a separate observability router with its own consumer group
+			obsRouter, err := event.NewObservabilityRouterWithRedis(*redisAddr, nil)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to create observability router")
+			} else {
+				// Create observability manager with separate subscriber for Redis
+				obsSubscriber := event.NewWatermillSubscriber(obsRouter.Subscriber)
+				obsManager = event.NewObservabilityManager(obsSubscriber)
+			}
+		} else {
+			// For in-memory, use the same subscriber as the main runner
+			obsManager = event.NewObservabilityManager(runner.Subscriber())
+		}
 		
 		// Add stdout observer with appropriate verbosity
 		stdoutObserver := event.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
@@ -134,11 +160,13 @@ func main() {
 	case "qa":
 		flowName = "Question-Answering Flow"
 		flow = qa.CreateQAFlow()
+		setupQANodeWorkers(runner)
 		runner.RegisterFlow(flow)
 
 	case "branching":
 		flowName = "Branching Intent Flow"
 		flow = branching.CreateBranchingFlow()
+		setupBranchingNodeWorkers(runner)
 		runner.RegisterFlow(flow)
 
 	default:
@@ -243,12 +271,77 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 	return testFlow
 }
 
+// setupQANodeWorkers registers node workers for the QA flow
+func setupQANodeWorkers(runner *event.Runner) {
+	// Create mock LLM for the answer node
+	mockLLM := qa.NewMockLLMClient()
+	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
+
+	// Create node workers using SimpleNode
+	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
+	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
+
+	// Register the node workers
+	runner.RegisterNodeWorkers(questionWorker, answerWorker)
+}
+
+// setupBranchingNodeWorkers registers node workers for the branching flow
+func setupBranchingNodeWorkers(runner *event.Runner) {
+	// Create a simple user input worker that simulates user input
+	userInputWorker := event.NewSimpleNode("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
+	
+	// Create node workers for all branching flow node types
+	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
+	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
+	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
+	helpWorker := event.NewSimpleNode("help", &branching.HelpHandler{}, runner.Publisher(), runner.StateStore())
+	generalWorker := event.NewSimpleNode("general", &branching.GeneralHandler{}, runner.Publisher(), runner.StateStore())
+
+	// Register all the node workers
+	runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
+}
+
+// CLIUserInputHandler implements SimpleNodeHandler for command line user input
+type CLIUserInputHandler struct{}
+
+// Prep handles the preparation phase
+func (h *CLIUserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+	// Get prompt from params or use default
+	prompt := "What would you like to know?"
+	if val, ok := ctx.Params["prompt"]; ok {
+		if promptStr, ok := val.(string); ok && promptStr != "" {
+			prompt = promptStr
+		}
+	}
+	return prompt, nil
+}
+
+// Exec handles the actual processing
+func (h *CLIUserInputHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+	// For CLI, we'll simulate user input
+	// In a real implementation, this could read from stdin
+	userInput := "What's the weather like in San Francisco?"
+	log.Info().Str("simulated_input", userInput).Msg("📝 Simulated user input")
+	return userInput, nil
+}
+
+// Post handles the post-processing and determines next action
+func (h *CLIUserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+	userInput := execResult.(string)
+	return "default", userInput, nil
+}
+
 // startWebServer starts the web UI server
-func startWebServer(port int) error {
+func startWebServer(port int, useRedis bool, redisAddr string) error {
 	log.Info().Int("port", port).Msg("🌐 Starting PocketFlow Web UI server...")
 
-	// Create a runner for the web server
-	runner := event.NewRunner(event.WithDebugMode(true))
+	// Create a runner for the web server (use Redis by default for web server)
+	var runner *event.Runner
+	if useRedis {
+		runner = event.NewRunnerWithRedis(redisAddr, event.WithDebugMode(true))
+	} else {
+		runner = event.NewRunner(event.WithDebugMode(true))
+	}
 	if err := runner.Init(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize runner for web server")
 		return err

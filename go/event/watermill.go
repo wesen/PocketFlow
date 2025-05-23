@@ -9,6 +9,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
+	"github.com/ThreeDotsLabs/watermill-redisstream/pkg/redisstream"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -16,29 +18,30 @@ import (
 type WatermillEventRouter struct {
 	NodeWorkers      map[string]core.NodeWorker
 	FlowWorkers      map[string]core.FlowWorker
-	PubSub           *gochannel.GoChannel
+	Publisher        message.Publisher
+	Subscriber       message.Subscriber
 	Router           *message.Router
 	Logger           watermill.LoggerAdapter
 }
 
 // WatermillPublisher implements the EventPublisher interface using Watermill
 type WatermillPublisher struct {
-	pubSub *gochannel.GoChannel
+	publisher message.Publisher
 }
 
 // WatermillSubscriber implements the EventSubscriber interface using Watermill
 type WatermillSubscriber struct {
-	pubSub *gochannel.GoChannel
+	subscriber message.Subscriber
 }
 
 // NewWatermillPublisher creates a new publisher using Watermill
-func NewWatermillPublisher(pubSub *gochannel.GoChannel) *WatermillPublisher {
-	return &WatermillPublisher{pubSub: pubSub}
+func NewWatermillPublisher(publisher message.Publisher) *WatermillPublisher {
+	return &WatermillPublisher{publisher: publisher}
 }
 
 // NewWatermillSubscriber creates a new subscriber using Watermill
-func NewWatermillSubscriber(pubSub *gochannel.GoChannel) *WatermillSubscriber {
-	return &WatermillSubscriber{pubSub: pubSub}
+func NewWatermillSubscriber(subscriber message.Subscriber) *WatermillSubscriber {
+	return &WatermillSubscriber{subscriber: subscriber}
 }
 
 // Publish publishes an event to a topic
@@ -73,7 +76,7 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 		Interface("event", event).
 		Msg("Publisher publishing message")
 
-	err = p.pubSub.Publish(topic, msg)
+	err = p.publisher.Publish(topic, msg)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -96,7 +99,7 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 // Subscribe subscribes to a topic with a handler function
 func (s *WatermillSubscriber) Subscribe(topic string, handler func([]byte)) error {
 	// Subscribe to the topic
-	messages, err := s.pubSub.Subscribe(context.Background(), topic)
+	messages, err := s.subscriber.Subscribe(context.Background(), topic)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
 	}
@@ -133,7 +136,8 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 	}
 
 	return &WatermillEventRouter{
-		PubSub:      pubSub,
+		Publisher:   pubSub,
+		Subscriber:  pubSub,
 		Router:      router,
 		NodeWorkers: make(map[string]core.NodeWorker),
 		FlowWorkers: make(map[string]core.FlowWorker),
@@ -165,9 +169,9 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 	r.Router.AddHandler(
 		handlerName,
 		topic,
-		r.PubSub,
+		r.Subscriber,
 		"node.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			log.Debug().
 				Str("handlerName", handlerName).
@@ -227,9 +231,9 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	r.Router.AddHandler(
 		flowHandlerName,
 		flowTopic,
-		r.PubSub,
+		r.Subscriber,
 		"flow.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			log.Debug().
 				Str("handlerName", flowHandlerName).
@@ -267,9 +271,9 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	r.Router.AddHandler(
 		nodeCompletedHandlerName,
 		nodeCompletedTopic,
-		r.PubSub,
+		r.Subscriber,
 		"node.completed.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			log.Debug().
 				Str("handlerName", nodeCompletedHandlerName).
@@ -316,9 +320,9 @@ func (r *WatermillEventRouter) SetupFlowCompletionHandler(handler func(core.Flow
 	r.Router.AddHandler(
 		"handle_flow_completed",
 		"flow.completed",
-		r.PubSub,
+		r.Subscriber,
 		"flow.completion.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			var completed core.FlowCompletedMessage
 			if err := json.Unmarshal(msg.Payload, &completed); err != nil {
@@ -357,9 +361,9 @@ func (r *WatermillEventRouter) SetupFlowFailureHandler(handler func(core.FlowFai
 	r.Router.AddHandler(
 		"handle_flow_failed",
 		"flow.failed",
-		r.PubSub,
+		r.Subscriber,
 		"flow.failure.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			var failed core.FlowFailedMessage
 			if err := json.Unmarshal(msg.Payload, &failed); err != nil {
@@ -380,9 +384,9 @@ func (r *WatermillEventRouter) SetupProgressHandler(handler func(core.ProgressUp
 	r.Router.AddHandler(
 		"handle_progress",
 		"progress",
-		r.PubSub,
+		r.Subscriber,
 		"progress.responses", // Unused but required by Watermill
-		r.PubSub,
+		r.Publisher,
 		func(msg *message.Message) ([]*message.Message, error) {
 			var progress core.ProgressUpdateMessage
 			if err := json.Unmarshal(msg.Payload, &progress); err != nil {
@@ -396,4 +400,135 @@ func (r *WatermillEventRouter) SetupProgressHandler(handler func(core.ProgressUp
 			return nil, nil
 		},
 	)
+}
+
+// NewWatermillEventRouterWithRedis creates a new router using Watermill with Redis Streams
+func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) *WatermillEventRouter {
+	if logger == nil {
+		logger = watermill.NewStdLogger(false, false)
+	}
+
+	// Create Redis client
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+		DB:   0,
+	})
+
+	// Create Redis publisher
+	publisher, err := redisstream.NewPublisher(
+		redisstream.PublisherConfig{
+			Client:     redisClient,
+			Marshaller: redisstream.DefaultMarshallerUnmarshaller{},
+		},
+		logger,
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Redis publisher")
+	}
+
+	// Create Redis subscriber for main application
+	subscriber, err := redisstream.NewSubscriber(
+		redisstream.SubscriberConfig{
+			Client:        redisClient,
+			Unmarshaller:  redisstream.DefaultMarshallerUnmarshaller{},
+			ConsumerGroup: "pocketflow_main",
+			Consumer:      "main_consumer",
+		},
+		logger,
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create Redis subscriber")
+	}
+
+	// Create a combined PubSub that implements both Publisher and Subscriber interfaces
+	pubSub := &RedisPubSub{
+		Publisher:  publisher,
+		Subscriber: subscriber,
+	}
+
+	router, err := message.NewRouter(message.RouterConfig{}, logger)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create router")
+	}
+
+	return &WatermillEventRouter{
+		Publisher:   pubSub.Publisher,
+		Subscriber:  pubSub.Subscriber,
+		Router:      router,
+		NodeWorkers: make(map[string]core.NodeWorker),
+		FlowWorkers: make(map[string]core.FlowWorker),
+		Logger:      logger,
+	}
+}
+
+// NewObservabilityRouterWithRedis creates a separate router for observability with its own consumer group
+func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) (*WatermillEventRouter, error) {
+	if logger == nil {
+		logger = watermill.NewStdLogger(false, false)
+	}
+
+	// Create Redis client
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+		DB:   0,
+	})
+
+	// Create Redis subscriber for observability with separate consumer group
+	subscriber, err := redisstream.NewSubscriber(
+		redisstream.SubscriberConfig{
+			Client:        redisClient,
+			Unmarshaller:  redisstream.DefaultMarshallerUnmarshaller{},
+			ConsumerGroup: "pocketflow_observability",
+			Consumer:      "observability_consumer",
+		},
+		logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Redis subscriber for observability: %w", err)
+	}
+
+	router, err := message.NewRouter(message.RouterConfig{}, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create router for observability: %w", err)
+	}
+
+	return &WatermillEventRouter{
+		Publisher:   nil, // Observability only needs to subscribe
+		Subscriber:  subscriber,
+		Router:      router,
+		NodeWorkers: make(map[string]core.NodeWorker),
+		FlowWorkers: make(map[string]core.FlowWorker),
+		Logger:      logger,
+	}, nil
+}
+
+// RedisPubSub combines Redis publisher and subscriber to implement the message.PubSub interface
+type RedisPubSub struct {
+	Publisher  message.Publisher
+	Subscriber message.Subscriber
+}
+
+// Publish implements the Publisher interface
+func (r *RedisPubSub) Publish(topic string, messages ...*message.Message) error {
+	return r.Publisher.Publish(topic, messages...)
+}
+
+// Subscribe implements the Subscriber interface
+func (r *RedisPubSub) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
+	return r.Subscriber.Subscribe(ctx, topic)
+}
+
+// Close implements the PubSub interface
+func (r *RedisPubSub) Close() error {
+	if closer, ok := r.Publisher.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			log.Error().Err(err).Msg("Error closing Redis publisher")
+		}
+	}
+	if closer, ok := r.Subscriber.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			log.Error().Err(err).Msg("Error closing Redis subscriber")
+		}
+	}
+	return nil
 }

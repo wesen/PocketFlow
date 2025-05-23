@@ -27,6 +27,8 @@ type Runner struct {
 	options       RunnerOptions
 	completeChans map[string]chan struct{}
 	muCompChans   sync.Mutex
+	useRedis      bool
+	redisAddr     string
 }
 
 // RunnerOptions configures the behavior of a Runner
@@ -118,6 +120,24 @@ func NewRunner(opts ...Option) *Runner {
 	return &Runner{
 		options:       options,
 		completeChans: make(map[string]chan struct{}),
+		useRedis:      false,
+	}
+}
+
+// NewRunnerWithRedis creates a new runner with Redis Streams messaging
+func NewRunnerWithRedis(redisAddr string, opts ...Option) *Runner {
+	options := DefaultOptions()
+
+	// Apply provided options
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	return &Runner{
+		options:       options,
+		completeChans: make(map[string]chan struct{}),
+		useRedis:      true,
+		redisAddr:     redisAddr,
 	}
 }
 
@@ -140,9 +160,15 @@ func (r *Runner) Init() error {
 	r.flowRegistry = impl.NewInMemoryFlowRegistry()
 	log.Info().Msg("Flow registry created")
 
-	// Set up router
-	r.router = NewWatermillEventRouter(nil)
-	r.publisher = NewWatermillPublisher(r.router.PubSub)
+	// Set up router based on messaging type
+	if r.useRedis {
+		log.Info().Str("redisAddr", r.redisAddr).Msg("Setting up Redis Streams router")
+		r.router = NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+	} else {
+		log.Info().Msg("Setting up in-memory router")
+		r.router = NewWatermillEventRouter(nil)
+	}
+	r.publisher = NewWatermillPublisher(r.router.Publisher)
 	log.Info().Msg("Event router and publisher initialized")
 
 	// Set up custom handlers that also signal any waiting flows
@@ -352,9 +378,9 @@ func (r *Runner) Publisher() core.EventPublisher {
 	return r.publisher
 }
 
-// Subscriber returns the event subscriber (uses the same PubSub as publisher)
+// Subscriber returns the event subscriber (uses the same Subscriber as router)
 func (r *Runner) Subscriber() core.EventSubscriber {
-	return NewWatermillSubscriber(r.router.PubSub)
+	return NewWatermillSubscriber(r.router.Subscriber)
 }
 
 // FlowRegistry returns the flow registry

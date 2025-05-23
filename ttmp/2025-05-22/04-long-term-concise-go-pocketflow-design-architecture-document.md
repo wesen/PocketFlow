@@ -124,6 +124,47 @@ type NodeCompletedMessage struct {
 | `flow.completed` | All flow completions | `flow.completed` |
 | `progress` | Progress updates | `progress` |
 
+## Messaging Infrastructure
+
+### Redis Streams (Default)
+```go
+// Consumer groups for message isolation
+// Main application: "pocketflow_main" 
+// Observability:   "pocketflow_observability"
+
+runner := NewRunnerWithRedis("localhost:6379")
+```
+
+**Benefits:**
+- **Persistent messaging**: Messages survive application restarts
+- **Consumer groups**: Proper message isolation and load balancing
+- **Multi-instance**: Multiple app instances can share infrastructure
+- **Message replay**: Debug issues by replaying message streams
+- **Enterprise-ready**: Production-grade reliability and scalability
+
+### In-Memory (Fallback)
+```go
+// For development and testing
+runner := NewRunner()  // or ./go -redis=false
+```
+
+**Benefits:**
+- **Simple setup**: No external dependencies
+- **Fast development**: Immediate feedback loop
+- **Testing**: Clean slate for each test run
+- **Lightweight**: Minimal resource usage
+
+### Comparison
+
+| Feature | Redis Streams | In-Memory |
+|---------|---------------|-----------|
+| Persistence | ✅ Messages persist | ❌ Lost on restart |
+| Multi-instance | ✅ Shared infrastructure | ❌ Isolated instances |
+| Observability isolation | ✅ Separate consumer groups | ⚠️ Shared message bus |
+| Setup complexity | ⚠️ Requires Redis | ✅ Zero dependencies |
+| Production ready | ✅ Enterprise-grade | ❌ Development only |
+| Message replay | ✅ Full replay capability | ❌ No message history |
+
 ## Flow Definition with Builder Pattern
 
 ### Simple Sequential Flow
@@ -274,9 +315,9 @@ shared := map[string]interface{}{
 
 ## Runner API
 
-### Basic Setup
+### Basic Setup (In-Memory)
 ```go
-// Create and initialize runner
+// Create and initialize runner with in-memory messaging
 runner := NewRunner(
     WithDebugMode(true),
     WithDatabaseURL("app.db"),
@@ -305,22 +346,98 @@ defer cancel()
 flowID, err := runner.RunFlowAndWait(flow, initialData)
 ```
 
+### Redis Streams Setup
+```go
+// Create and initialize runner with Redis Streams messaging
+runner := NewRunnerWithRedis("localhost:6379",
+    WithDebugMode(true),
+    WithDatabaseURL("app.db"),
+)
+runner.Init()
+
+// Everything else is the same as in-memory setup
+// But now you get:
+// - Persistent messaging via Redis Streams
+// - Consumer groups for proper message isolation
+// - Multi-instance support
+// - Message replay capabilities
+// - Enterprise-grade messaging infrastructure
+
+// Register workers and flows (same as above)
+questionWorker := NewQuestionNodeWorker(runner.Publisher(), runner.StateStore())
+// ... rest of setup identical
+```
+
 ### Enhanced with Observability
 ```go
-// Create runner with built-in observability
-runner := NewRunnerWithObservability(
+// Create runner with Redis and observability
+runner := NewRunnerWithRedis("localhost:6379",
     WithDebugMode(true),
 )
 
+// Setup observability (automatically uses separate Redis consumer group)
+obsManager := NewObservabilityManager(runner.Subscriber())
+stdoutObserver := NewStdoutObserverWithOptions("console", true, false)
+obsManager.AddObserver(stdoutObserver)
+obsManager.Start()
+
 // Everything else is the same, but now you get:
 // - Real-time console output with colors
-// - Complete execution tracing
+// - Complete execution tracing across instances
 // - Performance metrics
 // - Flow visualization
+// - Persistent observability data
+// - Multi-instance monitoring
 
-// Get execution trace
-trace, err := runner.GetTrace(flowID)
-runner.PrintTrace(flowID)  // Pretty-print the trace
+// Command-line alternatives:
+// ./go -flow basic -observability              # Redis + observability
+// ./go -redis=false -flow basic -observability # In-memory + observability
+```
+
+### Docker Deployment
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+      
+  pocketflow:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      - REDIS_ADDR=redis:6379
+    command: ./go -flow production_workflow -observability
+
+volumes:
+  redis_data:
+```
+
+### Command-Line Reference
+```bash
+# Basic usage with Redis (default)
+./go -flow basic                              # Run basic flow
+./go -flow qa -observability                 # QA flow with monitoring
+./go -flow branching -observability-verbose  # Verbose observability
+
+# Redis configuration
+./go -redis-addr redis:6379 -flow basic      # Custom Redis address
+./go -redis=false -flow basic                # Use in-memory messaging
+
+# Visualization and web UI
+./go -visualize -flow basic                  # Show flow diagram only
+./go -web                                    # Start web UI (port 8080)
+./go -web -web-port 3000                     # Web UI on custom port
+
+# Development helpers
+./go -help                                   # Show all options
+docker-compose up -d                         # Start Redis infrastructure
 ```
 
 ## Key Design Patterns

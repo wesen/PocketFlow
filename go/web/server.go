@@ -187,9 +187,11 @@ func (s *Server) handleStartFlow(w http.ResponseWriter, r *http.Request) {
 		flow = s.createBasicFlow()
 	case "qa":
 		flow = qa.CreateQAFlow()
+		s.setupQANodeWorkers()
 		s.runner.RegisterFlow(flow)
 	case "branching":
 		flow = branching.CreateBranchingFlow()
+		s.setupBranchingNodeWorkers()
 		s.runner.RegisterFlow(flow)
 	case "delay-test":
 		flow = s.createDelayTestFlow()
@@ -301,6 +303,65 @@ func (s *Server) createBasicFlow() core.Flow {
 	s.runner.RegisterFlow(testFlow)
 
 	return testFlow
+}
+
+// UserInputHandler implements SimpleNodeHandler for simulated user input in web context
+type UserInputHandler struct{}
+
+// Prep handles the preparation phase
+func (h *UserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+	// Get prompt from params or use default
+	prompt := "What would you like to know?"
+	if val, ok := ctx.Params["prompt"]; ok {
+		if promptStr, ok := val.(string); ok && promptStr != "" {
+			prompt = promptStr
+		}
+	}
+	return prompt, nil
+}
+
+// Exec handles the actual processing
+func (h *UserInputHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+	// In a web context, we'll simulate user input
+	// In a real implementation, this would wait for user input via WebSocket
+	userInput := "What's the weather like today?"
+	return userInput, nil
+}
+
+// Post handles the post-processing and determines next action
+func (h *UserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+	userInput := execResult.(string)
+	return "default", userInput, nil
+}
+
+// setupQANodeWorkers registers node workers for the QA flow
+func (s *Server) setupQANodeWorkers() {
+	// Create mock LLM for the answer node
+	mockLLM := qa.NewMockLLMClient()
+	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
+
+	// Create node workers using SimpleNode
+	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
+
+	// Register the node workers
+	s.runner.RegisterNodeWorkers(questionWorker, answerWorker)
+}
+
+// setupBranchingNodeWorkers registers node workers for the branching flow
+func (s *Server) setupBranchingNodeWorkers() {
+	// Create a simple user input worker that simulates user input
+	userInputWorker := event.NewSimpleNode("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	
+	// Create node workers for all branching flow node types
+	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	helpWorker := event.NewSimpleNode("help", &branching.HelpHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	generalWorker := event.NewSimpleNode("general", &branching.GeneralHandler{}, s.runner.Publisher(), s.runner.StateStore())
+
+	// Register all the node workers
+	s.runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
 }
 
 // createDelayTestFlow creates a flow with delay nodes for testing
