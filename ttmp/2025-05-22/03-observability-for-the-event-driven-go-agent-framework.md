@@ -400,12 +400,22 @@ type WatermillEventRouter struct {
 
 // NewWatermillEventRouterWithRedis creates a router using Redis Streams
 func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) *WatermillEventRouter {
-    // Implementation with Redis publisher/subscriber
+    // Implementation with Redis publisher/subscriber + middleware setup
 }
 
 // NewObservabilityRouterWithRedis creates observability router with separate consumer group
 func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) (*WatermillEventRouter, error) {
-    // Implementation with "pocketflow_observability" consumer group
+    // Implementation with "pocketflow_observability" consumer group + middleware
+}
+
+// setupRouterMiddlewares configures enterprise-grade middleware stack
+func setupRouterMiddlewares(router *message.Router, deadLetterPublisher message.Publisher, logger watermill.LoggerAdapter) {
+    // Circuit breaker: Prevents cascading failures
+    // Retry: Exponential backoff with 3 attempts
+    // Timeout: 30-second handler timeout
+    // Recovery: Panic recovery
+    // Dead letter queue: Failed messages to separate topic
+    // Correlation ID: Distributed tracing support
 }
 ```
 
@@ -514,6 +524,9 @@ obsManager.AddObserver(NewMetricsObserver("metrics", collector))
 - **NEW: Docker Compose setup for Redis infrastructure**
 - **NEW: Command-line flags for Redis configuration**
 - **NEW: Fallback to in-memory messaging when Redis is disabled**
+- **NEW: Enterprise middleware stack with dead letter queue**
+- **NEW: Circuit breaker, retry, timeout, and recovery middleware**
+- **NEW: Correlation ID support for distributed tracing**
 
 ✅ **TESTED & WORKING:**
 - Command-line integration with `-observability` and `-observability-verbose` flags
@@ -525,10 +538,31 @@ obsManager.AddObserver(NewMetricsObserver("metrics", collector))
 - **NEW: Redis Streams messaging with separate consumer groups**
 - **NEW: Docker Compose Redis setup**
 - **NEW: Observability isolation (doesn't steal events from main application)**
+- **NEW: Dead letter queue functionality preventing message loops**
+- **NEW: Circuit breaker state changes with logging**
+- **NEW: Retry mechanisms with exponential backoff**
+- **NEW: Branching flow with proper shared data access patterns**
 
 ### 7.3 Next Developer Notes
 
-The observability system is fully functional and ready for production use with Redis Streams support. Future enhancements could include:
+The observability system is fully functional and ready for production use with Redis Streams support and enterprise middleware. The system now includes:
+
+**✅ Production-Ready Features:**
+- Dead letter queue for failed message isolation
+- Circuit breaker preventing cascading failures
+- Exponential backoff retry with 3 attempts
+- 30-second timeout protection
+- Panic recovery middleware
+- Correlation ID for distributed tracing
+- Separate Redis consumer groups for isolation
+
+**Key Architectural Lessons:**
+- **Shared Data Access**: Always iterate through shared data rather than using hardcoded keys, as results are stored with nodeID
+- **Node Registration Order**: Register flows before node workers to avoid race conditions
+- **Error Message Routing**: Failed messages go to `node.failed` topic, not back to node's own topic
+- **Middleware Layering**: Recovery → Timeout → Poison Queue → Retry → Circuit Breaker → Correlation ID
+
+Future enhancements could include:
 
 1. **Additional Observers**: Database logging, metrics exporters, alerting systems
 2. **Distributed Tracing**: Integration with OpenTelemetry or Jaeger
@@ -538,5 +572,7 @@ The observability system is fully functional and ready for production use with R
 6. **Redis Cluster Support**: Scale Redis infrastructure horizontally
 7. **Cross-Instance Monitoring**: Monitor flows across multiple application instances
 8. **Message Replay**: Leverage Redis Streams' replay capabilities for debugging
+9. **Adaptive Circuit Breaker**: ML-based failure prediction
+10. **Rate Limiting**: Per-node and per-flow rate limiting middleware
 
-The foundation is solid and extensible - new observers just need to implement the `Observer` interface and specify their topic subscriptions. The Redis integration provides enterprise-grade messaging capabilities while maintaining the simplicity of the original design.
+The foundation is solid and extensible - new observers just need to implement the `Observer` interface and specify their topic subscriptions. The Redis integration with middleware provides enterprise-grade messaging capabilities while maintaining the simplicity of the original design.

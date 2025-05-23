@@ -141,6 +141,10 @@ runner := NewRunnerWithRedis("localhost:6379")
 - **Multi-instance**: Multiple app instances can share infrastructure
 - **Message replay**: Debug issues by replaying message streams
 - **Enterprise-ready**: Production-grade reliability and scalability
+- **Dead letter queue**: Failed messages are moved to `dead_letter_queue` topic
+- **Circuit breaker**: Prevents cascading failures with configurable thresholds
+- **Retry mechanism**: Exponential backoff with up to 3 retry attempts
+- **Timeout protection**: 30-second timeout prevents hanging handlers
 
 ### In-Memory (Fallback)
 ```go
@@ -164,6 +168,10 @@ runner := NewRunner()  // or ./go -redis=false
 | Setup complexity | ⚠️ Requires Redis | ✅ Zero dependencies |
 | Production ready | ✅ Enterprise-grade | ❌ Development only |
 | Message replay | ✅ Full replay capability | ❌ No message history |
+| Dead letter queue | ✅ Failed messages isolated | ❌ No DLQ support |
+| Circuit breaker | ✅ Prevents cascading failures | ✅ Basic protection |
+| Retry with backoff | ✅ Exponential backoff | ✅ Basic retry |
+| Timeout protection | ✅ 30s handler timeout | ✅ 30s handler timeout |
 
 ## Flow Definition with Builder Pattern
 
@@ -299,12 +307,21 @@ sequenceDiagram
 - **Purpose**: Global data structure accessible by all nodes
 - **Usage**: Store flow execution data, node results, context
 - **Design**: Typically an in-memory dictionary or database
+- **Key Pattern**: Results stored with `nodeID` as key, not semantic names
 
 ```go
+// Actual shared data structure (node results stored by ID)
 shared := map[string]interface{}{
-    "user_input": "What is AI?",
-    "llm_response": "AI is...",
-    "conversation_history": []map[string]string{},
+    "308b8a81-9fdf-4a41-8613-dab54dbbb50b": "What is AI?",        // user_input node result
+    "d4c7958e-4074-44a6-8048-75b1392c94f9": "general_intent",     // intent_classifier result
+    "started_at": "2025-05-23T11:41:50-04:00",                    // metadata
+}
+
+// Best practice: Access data by iteration, not hardcoded keys
+for key, value := range ctx.SharedData {
+    if userInput, ok := value.(string); ok && !strings.Contains(userInput, "_intent") {
+        // Found user input data
+    }
 }
 ```
 
@@ -478,8 +495,9 @@ docker-compose up -d                         # Start Redis infrastructure
 ### State Management
 1. **Shared Store Design**: Plan your data structure upfront
 2. **Immutable Params**: Use params for configuration, not data
-3. **Data Flow**: Clearly define how data flows between nodes
-4. **Cleanup**: Consider data lifecycle and cleanup
+3. **Data Flow**: Access shared data by iteration, not hardcoded keys
+4. **Node ID Pattern**: Results are stored with nodeID as key automatically
+5. **Cleanup**: Consider data lifecycle and cleanup
 
 ### Performance
 1. **Batch Operations**: Use BatchNode for multiple similar operations
