@@ -15,15 +15,25 @@ type IntentClassifierHandler struct{}
 
 // Prep handles the preparation phase
 func (h *IntentClassifierHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user question from shared data or params
-	userQuestion, ok := ctx.SharedData["user_input"].(string)
-	if !ok {
-		userQuestion, ok = ctx.Params["default_question"].(string)
-		if !ok {
-			userQuestion = "Default question"
+	// Get user question from shared data by looking for string values (user input from user_input node)
+	for key, value := range ctx.SharedData {
+		if key == "started_at" { // Skip metadata
+			continue
+		}
+		if userQuestion, ok := value.(string); ok && userQuestion != "" {
+			// Check if this looks like user input (not an intent classification result)
+			if !strings.Contains(userQuestion, "_intent") {
+				return userQuestion, nil
+			}
 		}
 	}
-	return userQuestion, nil
+	
+	// Fallback to params or default
+	if userQuestion, ok := ctx.Params["default_question"].(string); ok {
+		return userQuestion, nil
+	}
+	
+	return "Default question", nil
 }
 
 // Exec handles the actual processing
@@ -56,9 +66,22 @@ type WeatherHandler struct{}
 
 // Prep handles the preparation phase
 func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user query from shared data
-	userQuery, ok := ctx.SharedData["user_input"].(string)
-	if !ok {
+	// Get user query from shared data by looking for string values (user input from user_input node)
+	var userQuery string
+	for key, value := range ctx.SharedData {
+		if key == "started_at" { // Skip metadata
+			continue
+		}
+		if query, ok := value.(string); ok && query != "" {
+			// Check if this looks like user input (not an intent classification result)
+			if !strings.Contains(query, "_intent") {
+				userQuery = query
+				break
+			}
+		}
+	}
+	
+	if userQuery == "" {
 		return nil, fmt.Errorf("user input not found in shared data")
 	}
 
@@ -154,13 +177,19 @@ type GeneralHandler struct{}
 
 // Prep handles the preparation phase
 func (h *GeneralHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user query from shared data
-	userQuery, ok := ctx.SharedData["user_input"].(string)
-	if !ok {
-		return nil, fmt.Errorf("user input not found in shared data")
+	// Get user query from shared data by looking for string values (user input from user_input node)
+	for key, value := range ctx.SharedData {
+		if key == "started_at" { // Skip metadata
+			continue
+		}
+		if userQuery, ok := value.(string); ok && userQuery != "" {
+			// Check if this looks like user input (not an intent classification result)
+			if !strings.Contains(userQuery, "_intent") {
+				return userQuery, nil
+			}
+		}
 	}
-
-	return userQuery, nil
+	return nil, fmt.Errorf("user input not found in shared data")
 }
 
 // Exec handles the actual processing
