@@ -107,6 +107,44 @@ func (sda *SemanticDataAccessor) GetString(key string) (string, error) {
 	return "", fmt.Errorf("key '%s' is not a string", key)
 }
 
+func (sda *SemanticDataAccessor) GetInt(key string) (int, error) {
+	value, exists := sda.store.GetBySemantic(key)
+	if !exists {
+		return 0, fmt.Errorf("key '%s' not found", key)
+	}
+	if intValue, ok := value.(int); ok {
+		return intValue, nil
+	}
+	return 0, fmt.Errorf("key '%s' is not an int", key)
+}
+
+func (sda *SemanticDataAccessor) GetBool(key string) (bool, error) {
+	value, exists := sda.store.GetBySemantic(key)
+	if !exists {
+		return false, fmt.Errorf("key '%s' not found", key)
+	}
+	if boolValue, ok := value.(bool); ok {
+		return boolValue, nil
+	}
+	return false, fmt.Errorf("key '%s' is not a bool", key)
+}
+
+func (sda *SemanticDataAccessor) GetFloat64(key string) (float64, error) {
+	value, exists := sda.store.GetBySemantic(key)
+	if !exists {
+		return 0, fmt.Errorf("key '%s' not found", key)
+	}
+	if floatValue, ok := value.(float64); ok {
+		return floatValue, nil
+	}
+	return 0, fmt.Errorf("key '%s' is not a float64", key)
+}
+
+// GetStore provides access to the underlying StateStore
+func (sda *SemanticDataAccessor) GetStore() StateStore {
+	return sda.store
+}
+
 // SemanticNodeHandler interface for nodes that declare semantic outputs
 type SemanticNodeHandler interface {
 	DeclareOutputs() []SemanticOutput
@@ -226,6 +264,44 @@ func (lss *LayeredStateStore) UpdateWithSemantic(flowExecutionID, nodeID string,
 		lss.globalState.Metadata[key] = metadata
 
 	}
+
+	return nil
+}
+
+// GetSharedData retrieves shared data for a flow execution
+func (lss *LayeredStateStore) GetSharedData(flowExecutionID string) (map[string]interface{}, error) {
+	lss.mutex.RLock()
+	defer lss.mutex.RUnlock()
+
+	if flowState, exists := lss.globalState.FlowData[flowExecutionID]; exists {
+		// Convert semantic layer to traditional shared data format
+		result := make(map[string]interface{})
+		for key, value := range flowState.SemanticLayer {
+			result[key] = value
+		}
+		return result, nil
+	}
+
+	// Return empty map if flow execution not found
+	return make(map[string]interface{}), nil
+}
+
+// UpdateSharedData updates shared data for a flow execution
+func (lss *LayeredStateStore) UpdateSharedData(flowExecutionID, key string, value interface{}) error {
+	lss.mutex.Lock()
+	defer lss.mutex.Unlock()
+
+	// Ensure flow state exists
+	if _, exists := lss.globalState.FlowData[flowExecutionID]; !exists {
+		lss.globalState.FlowData[flowExecutionID] = &LayeredSharedState{
+			SemanticLayer: make(map[string]interface{}),
+			Metadata:      make(map[string]DataMetadata),
+			FlowData:      make(map[string]*LayeredSharedState),
+		}
+	}
+
+	// Update the semantic layer
+	lss.globalState.FlowData[flowExecutionID].SemanticLayer[key] = value
 
 	return nil
 }

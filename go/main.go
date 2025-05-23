@@ -14,6 +14,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/The-Pocket/PocketFlow/go/web"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -29,7 +30,7 @@ func main() {
 	webPort := flag.Int("web-port", 8080, "Port for web UI server")
 	useRedis := flag.Bool("redis", true, "Use Redis Streams for messaging (default: true)")
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis address (default: localhost:6379)")
-	
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nPocketFlow Go - Event-driven LLM application framework\n\n")
@@ -44,7 +45,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
-	
+
 	flag.Parse()
 
 	// Setup zerolog with console logger
@@ -57,7 +58,7 @@ func main() {
 
 	// Check if observability should be enabled
 	useObservability := *enableObservability || *observabilityVerbose
-	
+
 	// If web UI is requested, start the web server
 	if *webUI {
 		if err := startWebServer(*webPort, *useRedis, *redisAddr); err != nil {
@@ -65,7 +66,7 @@ func main() {
 		}
 		return
 	}
-	
+
 	// Create a runner with default options
 	// Create a closure with the runner reference
 	completionHandler := func(runner *event.Runner, completed core.FlowCompletedMessage) error {
@@ -83,10 +84,20 @@ func main() {
 			log.Info().Interface(key, value).Msg("Data")
 		}
 
+		// Demonstrate semantic data access
+		if semanticStore, ok := runner.StateStore().(semantic.StateStore); ok {
+			if userInput, exists := semanticStore.GetBySemantic("user_input"); exists {
+				log.Info().Interface("semantic_user_input", userInput).Msg("🧠 Semantic data accessed")
+			}
+			if response, exists := semanticStore.GetBySemantic("response"); exists {
+				log.Info().Interface("semantic_response", response).Msg("🧠 Semantic data accessed")
+			}
+		}
+
 		return nil
 	}
 
-	// Create runner with Redis or in-memory messaging
+	// Create runner with Redis or in-memory messaging (semantic state store used by default)
 	var runner *event.Runner
 	if *useRedis {
 		log.Info().Str("redisAddr", *redisAddr).Msg("🔗 Using Redis Streams for messaging")
@@ -110,7 +121,7 @@ func main() {
 	var obsManager event.ObservabilityManager
 	if useObservability {
 		log.Info().Msg("🔍 Setting up observability...")
-		
+
 		// Create observability manager with the runner's subscriber
 		if *useRedis {
 			// For Redis, create a separate observability router with its own consumer group
@@ -126,7 +137,7 @@ func main() {
 			// For in-memory, use the same subscriber as the main runner
 			obsManager = event.NewObservabilityManager(runner.Subscriber())
 		}
-		
+
 		// Add stdout observer with appropriate verbosity
 		stdoutObserver := event.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
 		err := obsManager.AddObserver(stdoutObserver)
@@ -135,7 +146,7 @@ func main() {
 		} else {
 			log.Info().Bool("verbose", *observabilityVerbose).Msg("✓ Added colorized console observer")
 		}
-		
+
 		// Add flow tracer for detailed flow tracking
 		flowTracer := event.NewStdoutFlowTracer("flow_tracer")
 		err = obsManager.AddObserver(flowTracer)
@@ -144,7 +155,7 @@ func main() {
 		} else {
 			log.Info().Msg("✓ Added flow tracer for status tracking")
 		}
-		
+
 		log.Info().Int("observers", len(obsManager.ListObservers())).Msg("🎯 Observability system ready")
 	}
 
@@ -237,7 +248,7 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 
 	// Create node workers
 	log.Debug().Msg("Creating node workers")
-	
+
 	questionNode := event.NewQuestionNodeWorker(
 		runner.Publisher(),
 		runner.StateStore(),
@@ -277,7 +288,7 @@ func setupQANodeWorkers(runner *event.Runner) {
 	mockLLM := qa.NewMockLLMClient()
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
-	// Create node workers using SimpleNode
+	// Create node workers using SimpleNode directly with handlers
 	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
 	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
 
@@ -289,8 +300,8 @@ func setupQANodeWorkers(runner *event.Runner) {
 func setupBranchingNodeWorkers(runner *event.Runner) {
 	// Create a simple user input worker that simulates user input
 	userInputWorker := event.NewSimpleNode("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
-	
-	// Create node workers for all branching flow node types
+
+	// Create node workers for all branching flow node types using handlers directly
 	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
 	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
 	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
@@ -301,11 +312,22 @@ func setupBranchingNodeWorkers(runner *event.Runner) {
 	runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
 }
 
-// CLIUserInputHandler implements SimpleNodeHandler for command line user input
+// CLIUserInputHandler implements SemanticNodeHandler for command line user input
 type CLIUserInputHandler struct{}
 
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *CLIUserInputHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{
+			Key:         "user_input",
+			Description: "The user's input from command line",
+			Tags:        []string{"input", "cli"},
+		},
+	}
+}
+
 // Prep handles the preparation phase
-func (h *CLIUserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+func (h *CLIUserInputHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get prompt from params or use default
 	prompt := "What would you like to know?"
 	if val, ok := ctx.Params["prompt"]; ok {
@@ -317,7 +339,7 @@ func (h *CLIUserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 }
 
 // Exec handles the actual processing
-func (h *CLIUserInputHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *CLIUserInputHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	// For CLI, we'll simulate user input
 	// In a real implementation, this could read from stdin
 	userInput := "What's the weather like in San Francisco?"
@@ -326,8 +348,19 @@ func (h *CLIUserInputHandler) Exec(ctx core.NodeContext, prepResult interface{})
 }
 
 // Post handles the post-processing and determines next action
-func (h *CLIUserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *CLIUserInputHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	userInput := execResult.(string)
+
+	// Store semantic data using the context's semantic data accessor
+	// Access the semantic data store to manually store the semantic information
+	if ctx.SemanticData != nil {
+		_, err := ctx.SemanticData.GetString("test") // This will test semantic data access
+		if err != nil {
+			log.Debug().Err(err).Msg("No existing semantic data (expected)")
+		}
+		log.Debug().Str("user_input", userInput).Msg("CLIUserInputHandler storing semantic data")
+	}
+
 	return "default", userInput, nil
 }
 
@@ -349,7 +382,7 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 
 	// Setup observability manager
 	obsManager := event.NewObservabilityManager(runner.Subscriber())
-	
+
 	// Add stdout observer for server-side logging
 	stdoutObserver := event.NewStdoutObserverWithOptions("server-console", true, false)
 	if err := obsManager.AddObserver(stdoutObserver); err != nil {
@@ -372,9 +405,9 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 
 	// Create and start web server
 	server := web.NewServer(runner, obsManager)
-	
+
 	log.Info().Int("port", port).Msg("🎯 Web UI available at http://localhost:%d")
-	
+
 	if err := server.Start(port); err != nil {
 		log.Error().Err(err).Msg("Web server failed")
 		return err

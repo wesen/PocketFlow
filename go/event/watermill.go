@@ -135,9 +135,9 @@ func setupRouterMiddlewares(router *message.Router, deadLetterPublisher message.
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
 			log.Info().
 				Str("circuit_breaker", name).
-				Str("from_state", string(from)).
-				Str("to_state", string(to)).
-				Msg("🔌 Circuit breaker state changed")
+				Str("from_state", fmt.Sprintf("%v", from)).
+				Str("to_state", fmt.Sprintf("%v", to)).
+				Msg("Circuit breaker state changed")
 		},
 	}
 	circuitBreakerMiddleware := middleware.NewCircuitBreaker(circuitBreakerSettings)

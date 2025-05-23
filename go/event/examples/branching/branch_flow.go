@@ -8,36 +8,36 @@ import (
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 )
 
 // IntentClassifierHandler implements SimpleNodeHandler for intent classification
 type IntentClassifierHandler struct{}
 
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *IntentClassifierHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{Key: "intent", Description: "Classified intent from user input"},
+	}
+}
+
 // Prep handles the preparation phase
-func (h *IntentClassifierHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user question from shared data by looking for string values (user input from user_input node)
-	for key, value := range ctx.SharedData {
-		if key == "started_at" { // Skip metadata
-			continue
+func (h *IntentClassifierHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
+	// Get user input using semantic data accessor
+	userInput, err := ctx.SemanticData.UserInput()
+	if err != nil {
+		// Fallback to params or default
+		if userQuestion, ok := ctx.Params["default_question"].(string); ok {
+			return userQuestion, nil
 		}
-		if userQuestion, ok := value.(string); ok && userQuestion != "" {
-			// Check if this looks like user input (not an intent classification result)
-			if !strings.Contains(userQuestion, "_intent") {
-				return userQuestion, nil
-			}
-		}
+		return "Default question", nil
 	}
-	
-	// Fallback to params or default
-	if userQuestion, ok := ctx.Params["default_question"].(string); ok {
-		return userQuestion, nil
-	}
-	
-	return "Default question", nil
+
+	return userInput, nil
 }
 
 // Exec handles the actual processing
-func (h *IntentClassifierHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *IntentClassifierHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	userQuestion := prepResult.(string)
 
 	// Simple rule-based classifier
@@ -56,7 +56,7 @@ func (h *IntentClassifierHandler) Exec(ctx core.NodeContext, prepResult interfac
 }
 
 // Post handles the post-processing and determines next action
-func (h *IntentClassifierHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *IntentClassifierHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	intent := execResult.(string)
 	return intent, intent, nil
 }
@@ -64,25 +64,19 @@ func (h *IntentClassifierHandler) Post(ctx core.NodeContext, prepResult, execRes
 // WeatherHandler implements SimpleNodeHandler for weather information
 type WeatherHandler struct{}
 
-// Prep handles the preparation phase
-func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user query from shared data by looking for string values (user input from user_input node)
-	var userQuery string
-	for key, value := range ctx.SharedData {
-		if key == "started_at" { // Skip metadata
-			continue
-		}
-		if query, ok := value.(string); ok && query != "" {
-			// Check if this looks like user input (not an intent classification result)
-			if !strings.Contains(query, "_intent") {
-				userQuery = query
-				break
-			}
-		}
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *WeatherHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{Key: "weather_response", Description: "Weather information response"},
 	}
-	
-	if userQuery == "" {
-		return nil, fmt.Errorf("user input not found in shared data")
+}
+
+// Prep handles the preparation phase
+func (h *WeatherHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
+	// Get user input using semantic data accessor
+	userQuery, err := ctx.SemanticData.UserInput()
+	if err != nil {
+		return nil, fmt.Errorf("user input not found: %w", err)
 	}
 
 	// Extract location from query (simplified)
@@ -98,7 +92,7 @@ func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 }
 
 // Exec handles the actual processing
-func (h *WeatherHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *WeatherHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	location := prepResult.(string)
 
 	// In a real implementation, call an actual weather API
@@ -114,7 +108,7 @@ func (h *WeatherHandler) Exec(ctx core.NodeContext, prepResult interface{}) (int
 }
 
 // Post handles the post-processing and determines next action
-func (h *WeatherHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *WeatherHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	weatherData := execResult.(map[string]interface{})
 
 	// Form a readable response
@@ -132,21 +126,28 @@ func (h *WeatherHandler) Post(ctx core.NodeContext, prepResult, execResult inter
 // TimeHandler implements SimpleNodeHandler for time information
 type TimeHandler struct{}
 
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *TimeHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{Key: "time_response", Description: "Current time information"},
+	}
+}
+
 // Prep handles the preparation phase
-func (h *TimeHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+func (h *TimeHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// No special preparation needed
 	return nil, nil
 }
 
 // Exec handles the actual processing
-func (h *TimeHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *TimeHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	// Get current time
 	currentTime := fmt.Sprintf("The current time is %s", time.Now().Format("15:04:05"))
 	return currentTime, nil
 }
 
 // Post handles the post-processing and determines next action
-func (h *TimeHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *TimeHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	timeInfo := execResult.(string)
 	return "default", timeInfo, nil
 }
@@ -154,20 +155,27 @@ func (h *TimeHandler) Post(ctx core.NodeContext, prepResult, execResult interfac
 // HelpHandler implements SimpleNodeHandler for providing help
 type HelpHandler struct{}
 
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *HelpHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{Key: "help_response", Description: "Help information for the user"},
+	}
+}
+
 // Prep handles the preparation phase
-func (h *HelpHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+func (h *HelpHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// No special preparation needed
 	return nil, nil
 }
 
 // Exec handles the actual processing
-func (h *HelpHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *HelpHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	helpMessage := "You can ask me about the weather, the time, or general questions."
 	return helpMessage, nil
 }
 
 // Post handles the post-processing and determines next action
-func (h *HelpHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *HelpHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	helpInfo := execResult.(string)
 	return "default", helpInfo, nil
 }
@@ -175,25 +183,25 @@ func (h *HelpHandler) Post(ctx core.NodeContext, prepResult, execResult interfac
 // GeneralHandler implements SimpleNodeHandler for general responses
 type GeneralHandler struct{}
 
-// Prep handles the preparation phase
-func (h *GeneralHandler) Prep(ctx core.NodeContext) (interface{}, error) {
-	// Get user query from shared data by looking for string values (user input from user_input node)
-	for key, value := range ctx.SharedData {
-		if key == "started_at" { // Skip metadata
-			continue
-		}
-		if userQuery, ok := value.(string); ok && userQuery != "" {
-			// Check if this looks like user input (not an intent classification result)
-			if !strings.Contains(userQuery, "_intent") {
-				return userQuery, nil
-			}
-		}
+// DeclareOutputs implements semantic.SemanticNodeHandler interface
+func (h *GeneralHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{Key: "general_response", Description: "General AI response to user query"},
 	}
-	return nil, fmt.Errorf("user input not found in shared data")
+}
+
+// Prep handles the preparation phase
+func (h *GeneralHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
+	// Get user input using semantic data accessor
+	userQuery, err := ctx.SemanticData.UserInput()
+	if err != nil {
+		return nil, fmt.Errorf("user input not found: %w", err)
+	}
+	return userQuery, nil
 }
 
 // Exec handles the actual processing
-func (h *GeneralHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *GeneralHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	userQuery := prepResult.(string)
 
 	// In a real implementation, call an LLM
@@ -207,7 +215,7 @@ func (h *GeneralHandler) Exec(ctx core.NodeContext, prepResult interface{}) (int
 }
 
 // Post handles the post-processing and determines next action
-func (h *GeneralHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *GeneralHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	response := execResult.(string)
 	return "default", response, nil
 }

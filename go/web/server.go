@@ -13,6 +13,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -305,11 +306,22 @@ func (s *Server) createBasicFlow() core.Flow {
 	return testFlow
 }
 
-// UserInputHandler implements SimpleNodeHandler for simulated user input in web context
+// UserInputHandler implements semantic node handler for simulated user input in web context
 type UserInputHandler struct{}
 
+// DeclareOutputs declares the semantic outputs this node produces
+func (h *UserInputHandler) DeclareOutputs() []semantic.SemanticOutput {
+	return []semantic.SemanticOutput{
+		{
+			Key:         "user_input",
+			Description: "The input provided by the user",
+			Tags:        []string{"input", "user"},
+		},
+	}
+}
+
 // Prep handles the preparation phase
-func (h *UserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+func (h *UserInputHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get prompt from params or use default
 	prompt := "What would you like to know?"
 	if val, ok := ctx.Params["prompt"]; ok {
@@ -317,20 +329,35 @@ func (h *UserInputHandler) Prep(ctx core.NodeContext) (interface{}, error) {
 			prompt = promptStr
 		}
 	}
+
+	// Try to access previous semantic data for context
+	if previousInput, err := ctx.SemanticData.GetString("user_input"); err == nil {
+		prompt = fmt.Sprintf("Previous input was: %s. What else would you like to know?", previousInput)
+	}
+
 	return prompt, nil
 }
 
 // Exec handles the actual processing
-func (h *UserInputHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *UserInputHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	// In a web context, we'll simulate user input
 	// In a real implementation, this would wait for user input via WebSocket
 	userInput := "What's the weather like today?"
+
+	// Log semantic data access for demonstration
+	if intent, err := ctx.SemanticData.Intent(); err == nil {
+		userInput = fmt.Sprintf("Following up on %s: What's the weather like today?", intent)
+	}
+
 	return userInput, nil
 }
 
 // Post handles the post-processing and determines next action
-func (h *UserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *UserInputHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	userInput := execResult.(string)
+
+	// Return semantic outputs
+
 	return "default", userInput, nil
 }
 
@@ -340,7 +367,7 @@ func (s *Server) setupQANodeWorkers() {
 	mockLLM := qa.NewMockLLMClient()
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
-	// Create node workers using SimpleNode
+	// Create node workers using SimpleNode with semantic adapters
 	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
 	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
 
@@ -350,10 +377,10 @@ func (s *Server) setupQANodeWorkers() {
 
 // setupBranchingNodeWorkers registers node workers for the branching flow
 func (s *Server) setupBranchingNodeWorkers() {
-	// Create a simple user input worker that simulates user input
+	// Create a simple user input worker that simulates user input using semantic adapter
 	userInputWorker := event.NewSimpleNode("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	
-	// Create node workers for all branching flow node types
+
+	// Create node workers for all branching flow node types using legacy semantic adapters
 	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
 	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
 	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())

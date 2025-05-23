@@ -2,6 +2,7 @@ package impl
 
 import (
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 )
 
 // nodeBuilderImpl implements the NodeBuilder interface
@@ -9,52 +10,52 @@ type nodeBuilderImpl struct {
 	nodeType  string
 	name      string
 	params    core.NodeParams
-	prepFn    func(ctx core.NodeContext) (interface{}, error)
-	execFn    func(ctx core.NodeContext, prepResult interface{}) (interface{}, error)
-	postFn    func(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
+	prepFn    func(ctx semantic.NodeContext) (interface{}, error)
+	execFn    func(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error)
+	postFn    func(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
 	publisher core.EventPublisher
-	store     core.StateStore
+	store     semantic.StateStore
 }
 
 // functionBasedHandler adapts callback functions to the SimpleNodeHandler interface
 type functionBasedHandler struct {
-	prepFn func(ctx core.NodeContext) (interface{}, error)
-	execFn func(ctx core.NodeContext, prepResult interface{}) (interface{}, error)
-	postFn func(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
+	prepFn func(ctx semantic.NodeContext) (interface{}, error)
+	execFn func(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error)
+	postFn func(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
 }
 
 // defaultPrepFn is used when no prep function is provided
-func defaultPrepFn(ctx core.NodeContext) (interface{}, error) {
+func defaultPrepFn(ctx semantic.NodeContext) (interface{}, error) {
 	return nil, nil
 }
 
 // defaultExecFn is used when no exec function is provided
-func defaultExecFn(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func defaultExecFn(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	return prepResult, nil
 }
 
 // defaultPostFn is used when no post function is provided
-func defaultPostFn(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func defaultPostFn(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	return "default", execResult, nil
 }
 
 // Prep implements SimpleNodeHandler.Prep
-func (h *functionBasedHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+func (h *functionBasedHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	return h.prepFn(ctx)
 }
 
 // Exec implements SimpleNodeHandler.Exec
-func (h *functionBasedHandler) Exec(ctx core.NodeContext, prepResult interface{}) (interface{}, error) {
+func (h *functionBasedHandler) Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error) {
 	return h.execFn(ctx, prepResult)
 }
 
 // Post implements SimpleNodeHandler.Post
-func (h *functionBasedHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+func (h *functionBasedHandler) Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	return h.postFn(ctx, prepResult, execResult)
 }
 
 // NewNodeBuilder creates a new NodeBuilder instance
-func NewNodeBuilder(nodeType string, publisher core.EventPublisher, store core.StateStore) core.NodeBuilder {
+func NewNodeBuilder(nodeType string, publisher core.EventPublisher, store semantic.StateStore) core.NodeBuilder {
 	return &nodeBuilderImpl{
 		nodeType:  nodeType,
 		name:      nodeType, // Default name is the type
@@ -80,19 +81,19 @@ func (b *nodeBuilderImpl) WithParam(key string, value interface{}) core.NodeBuil
 }
 
 // WithPrep sets the prep handler function
-func (b *nodeBuilderImpl) WithPrep(handler func(ctx core.NodeContext) (interface{}, error)) core.NodeBuilder {
+func (b *nodeBuilderImpl) WithPrep(handler func(ctx semantic.NodeContext) (interface{}, error)) core.NodeBuilder {
 	b.prepFn = handler
 	return b
 }
 
 // WithExec sets the exec handler function
-func (b *nodeBuilderImpl) WithExec(handler func(ctx core.NodeContext, prepResult interface{}) (interface{}, error)) core.NodeBuilder {
+func (b *nodeBuilderImpl) WithExec(handler func(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error)) core.NodeBuilder {
 	b.execFn = handler
 	return b
 }
 
 // WithPost sets the post handler function
-func (b *nodeBuilderImpl) WithPost(handler func(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) core.NodeBuilder {
+	func (b *nodeBuilderImpl) WithPost(handler func(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) core.NodeBuilder {
 	b.postFn = handler
 	return b
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/rs/zerolog/log"
 )
@@ -15,7 +16,7 @@ type SimpleNode struct {
 	nodeType  string
 	handler   core.SimpleNodeHandler
 	publisher core.EventPublisher
-	store     core.StateStore
+	store     semantic.StateStore
 }
 
 // NewSimpleNode creates a new SimpleNode
@@ -23,7 +24,7 @@ func NewSimpleNode(
 	nodeType string,
 	handler core.SimpleNodeHandler,
 	publisher core.EventPublisher,
-	store core.StateStore,
+	store semantic.StateStore,
 ) *SimpleNode {
 	return &SimpleNode{
 		nodeType:  nodeType,
@@ -123,15 +124,13 @@ func (n *SimpleNode) handleExecRequested(event core.ExecRequestedMessage) error 
 		Interface("sharedData", sharedData).
 		Msg("NodeWorker retrieved shared data")
 	
-	// Create node context
-	ctx := core.NodeContext{
+	// Create semantic node context
+	ctx := semantic.NodeContext{
 		FlowExecutionID: event.FlowExecutionID,
-		NodeExecutionID: event.NodeExecutionID,
 		NodeID:          event.NodeID,
 		NodeType:        event.NodeType,
 		Params:          event.Params,
-		SharedData:      sharedData,
-		StateStore:      n.store,
+		SemanticData:    semantic.NewSemanticDataAccessor(n.store),
 	}
 	
 	// Execute the prep phase
@@ -216,6 +215,32 @@ func (n *SimpleNode) handleExecRequested(event core.ExecRequestedMessage) error 
 			Str("phase", "post").
 			Msg("NodeWorker post phase failed")
 		return n.handleExecError(event, fmt.Errorf("post phase failed: %w", err), 0, false)
+	}
+
+	// Update shared data with result using semantic keys if the node is semantic-aware
+	semanticKeys := []string{event.NodeID} // Default to nodeID as semantic key
+	tags := []string{}
+	
+	// Check if handler implements SemanticNodeHandler interface
+	if semanticHandler, ok := n.handler.(semantic.SemanticNodeHandler); ok {
+		outputs := semanticHandler.DeclareOutputs()
+		if len(outputs) > 0 {
+			// Use the first semantic output for the primary result
+			semanticKeys = []string{outputs[0].Key}
+			tags = outputs[0].Tags
+		}
+	}
+
+	// Store the result with semantic registration
+	err = n.store.UpdateWithSemantic(event.FlowExecutionID, event.NodeID, result, semanticKeys, tags)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("nodeType", n.nodeType).
+			Str("flowExecutionID", event.FlowExecutionID).
+			Str("nodeExecutionID", event.NodeExecutionID).
+			Msg("NodeWorker failed to update semantic data")
+		// Continue execution even if semantic update fails
 	}
 	
 	log.Debug().

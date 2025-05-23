@@ -1,6 +1,10 @@
 // Package core provides the foundational interfaces for PocketFlow
 package core
 
+import (
+	"github.com/The-Pocket/PocketFlow/go/semantic"
+)
+
 // NodeParams represents the parameters for a node instance
 type NodeParams map[string]interface{}
 
@@ -90,28 +94,6 @@ type EventSubscriber interface {
 	Subscribe(topic string, handler func([]byte)) error
 }
 
-// StateStore interface for storing and retrieving state
-type StateStore interface {
-	// Store shared data for a flow execution
-	StoreSharedData(flowExecutionID string, data map[string]interface{}) error
-	// Get shared data for a flow execution
-	GetSharedData(flowExecutionID string) (map[string]interface{}, error)
-	// Store the result of a node's prep/exec/post step
-	StoreNodeResult(nodeExecutionID string, stepType string, result interface{}) (string, error)
-	// Get a stored result by reference
-	GetNodeResult(resultRef string) (interface{}, error)
-	// Store flow definition
-	StoreFlowDefinition(flowID string, definition Flow) error
-	// Get flow definition
-	GetFlowDefinition(flowID string) (Flow, error)
-	// Get flow definition by execution ID
-	GetFlowDefinitionByExecutionID(executionID string) (Flow, error)
-	// Store a mapping between execution ID and definition ID
-	StoreFlowExecution(executionID string, definitionID string) error
-	// Update shared data with node result
-	UpdateSharedData(flowExecutionID string, nodeID string, result interface{}) error
-}
-
 // FlowRegistry interface for managing flow definitions
 type FlowRegistry interface {
 	// Get a flow definition by ID
@@ -124,27 +106,16 @@ type FlowRegistry interface {
 	GetFlowDefinition(flowID string) (*FlowDefinition, error)
 }
 
-// NodeContext provides access to the execution context of a node
-type NodeContext struct {
-	FlowExecutionID string
-	NodeExecutionID string
-	NodeID          string
-	NodeType        string
-	Params          NodeParams
-	SharedData      map[string]interface{}
-	StateStore      StateStore
-}
-
 // SimpleNodeHandler is a simplified interface for node handlers
 type SimpleNodeHandler interface {
 	// Prep handles the preparation phase
-	Prep(ctx NodeContext) (interface{}, error)
+	Prep(ctx semantic.NodeContext) (interface{}, error)
 
 	// Exec handles the execution phase
-	Exec(ctx NodeContext, prepResult interface{}) (interface{}, error)
+	Exec(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error)
 
 	// Post handles the post-processing phase and returns the action to take
-	Post(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
+	Post(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)
 }
 
 // NodeBuilder provides a fluent API for building nodes
@@ -156,13 +127,13 @@ type NodeBuilder interface {
 	WithParam(key string, value interface{}) NodeBuilder
 
 	// WithPrep sets the prep handler function
-	WithPrep(handler func(ctx NodeContext) (interface{}, error)) NodeBuilder
+	WithPrep(handler func(ctx semantic.NodeContext) (interface{}, error)) NodeBuilder
 
 	// WithExec sets the exec handler function
-	WithExec(handler func(ctx NodeContext, prepResult interface{}) (interface{}, error)) NodeBuilder
+	WithExec(handler func(ctx semantic.NodeContext, prepResult interface{}) (interface{}, error)) NodeBuilder
 
 	// WithPost sets the post handler function
-	WithPost(handler func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) NodeBuilder
+	WithPost(handler func(ctx semantic.NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) NodeBuilder
 
 	// Build creates a Node instance with the specified configuration
 	Build() NodeWorker

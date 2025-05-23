@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -15,14 +16,14 @@ import (
 type GenericFlowWorker struct {
 	FlowTypeName string
 	Publisher    core.EventPublisher
-	StateStore   core.StateStore
+	StateStore   semantic.StateStore
 	Registry     core.FlowRegistry
 }
 
 func NewGenericFlowWorker(
 	flowType string,
 	publisher core.EventPublisher,
-	stateStore core.StateStore,
+	stateStore semantic.StateStore,
 	registry core.FlowRegistry,
 ) *GenericFlowWorker {
 	return &GenericFlowWorker{
@@ -264,13 +265,16 @@ func (w *GenericFlowWorker) handleFlowStartRequested(msg *message.Message) error
 		Msg("FlowWorker processing flow start request")
 	
 	// Store the initial shared data
-	if err := w.StateStore.StoreSharedData(flowStart.FlowExecutionID, flowStart.InitialSharedData); err != nil {
-		log.Error().
-			Err(err).
-			Str("flowType", w.FlowTypeName).
-			Str("flowExecutionID", flowStart.FlowExecutionID).
-			Msg("FlowWorker failed to store initial shared data")
-		return w.handleFlowInitializationError(flowStart, err)
+	for key, value := range flowStart.InitialSharedData {
+		if err := w.StateStore.UpdateSharedData(flowStart.FlowExecutionID, key, value); err != nil {
+			log.Error().
+				Err(err).
+				Str("flowType", w.FlowTypeName).
+				Str("flowExecutionID", flowStart.FlowExecutionID).
+				Str("key", key).
+				Msg("FlowWorker failed to store initial shared data")
+			return w.handleFlowInitializationError(flowStart, err)
+		}
 	}
 	
 	log.Debug().

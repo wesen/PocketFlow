@@ -12,6 +12,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
 	"github.com/The-Pocket/PocketFlow/go/logger"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -20,7 +21,7 @@ import (
 // Runner encapsulates all the components needed to run PocketFlow
 // applications, providing a simplified API for setting up and executing flows.
 type Runner struct {
-	stateStore    core.StateStore
+	stateStore    semantic.StateStore
 	flowRegistry  core.FlowRegistry
 	publisher     core.EventPublisher
 	router        *WatermillEventRouter
@@ -149,11 +150,7 @@ func (r *Runner) Init() error {
 
 	// Initialize state store
 	log.Debug().Str("databaseURL", r.options.DatabaseURL).Msg("Creating state store")
-	stateStore, err := impl.NewSQLiteStateStore(r.options.DatabaseURL)
-	if err != nil {
-		return fmt.Errorf("failed to create state store: %w", err)
-	}
-	r.stateStore = stateStore
+	r.stateStore = semantic.NewLayeredStateStore()
 	log.Info().Msg("State store initialized")
 
 	// Create flow registry
@@ -369,7 +366,7 @@ func (r *Runner) GetSharedData(flowExecutionID string) (map[string]interface{}, 
 }
 
 // StateStore returns the state store
-func (r *Runner) StateStore() core.StateStore {
+func (r *Runner) StateStore() semantic.StateStore {
 	return r.stateStore
 }
 

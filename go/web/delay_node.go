@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
@@ -42,11 +43,11 @@ func (n *DelayNode) Params() core.NodeParams {
 // DelayNodeWorker implements NodeWorker for delay nodes
 type DelayNodeWorker struct {
 	publisher  core.EventPublisher
-	stateStore core.StateStore
+	stateStore semantic.StateStore
 }
 
 // NewDelayNodeWorker creates a new delay node worker
-func NewDelayNodeWorker(publisher core.EventPublisher, stateStore core.StateStore) core.NodeWorker {
+func NewDelayNodeWorker(publisher core.EventPublisher, stateStore semantic.StateStore) core.NodeWorker {
 	return &DelayNodeWorker{
 		publisher:  publisher,
 		stateStore: stateStore,
@@ -141,7 +142,7 @@ func (w *DelayNodeWorker) HandleMessage(msgObj interface{}) error {
 		"completed_at":     time.Now().Format(time.RFC3339),
 	}
 
-	if err := w.stateStore.StoreSharedData(msg.FlowExecutionID, sharedData); err != nil {
+	if err := w.stateStore.UpdateSharedData(msg.FlowExecutionID, delayKey, sharedData[delayKey]); err != nil {
 		log.Error().Err(err).Msg("Failed to update shared data")
 		return err
 	}
