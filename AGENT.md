@@ -28,3 +28,12 @@ Use github.com/pkg/errors for wrapping errors.
 When starting goroutines, use errgroup.
 go doesn't support the ternary operator, use if else instead.
 </goGuidelines>
+
+<code-guidelines>
+when designing new features, don't (unless explicitly asked for):
+- maintain backwards compatibility
+- consider performance
+- consider memory usage
+- consider security
+- consider scalability
+</code-guidelines>

@@ -703,3 +703,164 @@ return userInput, nil
 ```
 
 This approach provides immediate benefits while allowing gradual adoption across the codebase.
+
+## Current Branching Flow Shared State Example
+
+To illustrate the current issues, here's what the shared state looks like during execution of the branching workflow in `go/event/examples/branching/branch_flow.go`:
+
+### Actual Shared State During Flow Execution
+
+```go
+// After user_input node completes
+sharedData = {
+    "308b8a81-9fdf-4a41-8613-dab54dbbb50b": "What's the weather like in San Francisco?", // user_input node result
+    "started_at": "2025-05-23T11:41:50-04:00",                                           // metadata
+}
+
+// After intent_classifier node completes  
+sharedData = {
+    "308b8a81-9fdf-4a41-8613-dab54dbbb50b": "What's the weather like in San Francisco?", // user_input node result
+    "d4c7958e-4074-44a6-8048-75b1392c94f9": "weather_intent",                           // intent_classifier result
+    "started_at": "2025-05-23T11:41:50-04:00",                                           // metadata
+}
+
+// After weather node completes
+sharedData = {
+    "308b8a81-9fdf-4a41-8613-dab54dbbb50b": "What's the weather like in San Francisco?", // user_input node result
+    "d4c7958e-4074-44a6-8048-75b1392c94f9": "weather_intent",                           // intent_classifier result
+    "a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6": "The weather in San Francisco is sunny with a temperature of 72°F and humidity of 45%.", // weather node result
+    "started_at": "2025-05-23T11:41:50-04:00",                                           // metadata
+}
+```
+
+### Current Fragile Access Pattern
+
+Every handler uses the same brittle pattern to find user input:
+
+```go
+// From WeatherHandler.Prep() - lines 71-82
+func (h *WeatherHandler) Prep(ctx core.NodeContext) (interface{}, error) {
+    var userQuery string
+    for key, value := range ctx.SharedData {
+        if key == "started_at" { // Skip metadata
+            continue
+        }
+        if query, ok := value.(string); ok && query != "" {
+            // Check if this looks like user input (not an intent classification result)
+            if !strings.Contains(query, "_intent") {
+                userQuery = query
+                break
+            }
+        }
+    }
+    
+    if userQuery == "" {
+        return nil, fmt.Errorf("user input not found in shared data")
+    }
+    // ... rest of method
+}
+```
+
+### Problems Illustrated
+
+1. **Opaque Keys**: `"308b8a81-9fdf-4a41-8613-dab54dbbb50b"` tells us nothing about the data
+2. **Heuristic Access**: Must filter out strings containing `"_intent"` to find user input
+3. **Code Duplication**: Same iteration pattern repeated in multiple handlers
+4. **Fragile Logic**: Breaking if intent results change format or new string data is added
+5. **Poor Debugging**: Can't easily inspect what `"d4c7958e-4074-44a6-8048-75b1392c94f9"` contains
+
+### How It Would Look With Enhanced Patterns
+
+#### With Layered State Pattern:
+```go
+// Semantic layer
+semanticData = {
+    "user_input": "What's the weather like in San Francisco?",
+    "intent": "weather_intent", 
+    "weather_response": "The weather in San Francisco is sunny with a temperature of 72°F and humidity of 45%.",
+}
+
+// Type collections
+typedCollections = {
+    string: [
+        "What's the weather like in San Francisco?",
+        "weather_intent",
+        "The weather in San Francisco is sunny with a temperature of 72°F and humidity of 45%."
+    ],
+    map[string]interface{}: [
+        {
+            "location": "San Francisco",
+            "temperature": 72,
+            "condition": "sunny", 
+            "humidity": 45
+        }
+    ]
+}
+
+// Metadata
+metadata = {
+    "308b8a81-9fdf-4a41-8613-dab54dbbb50b": {
+        "producer_node_type": "user_input",
+        "semantic_keys": ["user_input", "query", "input_text"],
+        "tags": ["user_data", "text", "input"],
+        "timestamp": "2025-05-23T11:41:50-04:00"
+    },
+    "d4c7958e-4074-44a6-8048-75b1392c94f9": {
+        "producer_node_type": "intent_classifier", 
+        "semantic_keys": ["intent", "classification"],
+        "tags": ["classification", "intent"],
+        "timestamp": "2025-05-23T11:41:52-04:00"
+    }
+}
+```
+
+#### Enhanced Handler Implementation:
+```go
+func (h *WeatherHandler) Prep(ctx EnhancedNodeContext) (interface{}, error) {
+    // Option 1: Semantic access (clearest)
+    if userInput, exists := ctx.StateQuery.GetBySemantic("user_input"); exists {
+        return userInput.(string), nil
+    }
+    
+    // Option 2: Type-safe access (most robust)
+    userInput, err := ctx.StateQuery.GetTyped[string]("user_input")
+    if err != nil {
+        return nil, fmt.Errorf("user input not found: %w", err)
+    }
+    
+    return userInput, nil
+}
+```
+
+#### Data Contract Example:
+```go
+// Weather handler declares its requirements
+func (h *WeatherHandler) GetDataContract() DataContract {
+    return DataContract{
+        Requires: []DataSpec{
+            {
+                Key:         "user_input",
+                Type:        "string", 
+                Description: "User's weather query",
+                Optional:    false,
+            },
+        },
+        Provides: []DataSpec{
+            {
+                Key:         "weather_response",
+                Type:        "string",
+                Description: "Formatted weather information",
+                Optional:    false,
+            },
+            {
+                Key:         "weather_data",
+                Type:        "map[string]interface{}",
+                Description: "Raw weather data object",
+                Optional:    true,
+            },
+        },
+    }
+}
+```
+
+This example clearly shows how the current nodeID-based storage creates maintenance burdens and how the proposed patterns would eliminate the fragile iteration-based access code.
