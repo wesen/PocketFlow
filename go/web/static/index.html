@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PocketFlow - Flow Management & Observability</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-12">
+                <nav class="navbar navbar-dark bg-dark mb-4">
+                    <div class="container-fluid">
+                        <span class="navbar-brand mb-0 h1">
+                            🚀 PocketFlow - Flow Management & Observability
+                        </span>
+                        <span class="navbar-text">
+                            <span id="connection-status" class="status-indicator status-disconnected"></span>
+                            <span id="connection-text">Disconnected</span>
+                        </span>
+                    </div>
+                </nav>
+            </div>
+        </div>
+        
+        <div class="row">
+            <!-- Flow Management Panel -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">📋 Flow Management</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="flow-form">
+                            <div class="mb-3">
+                                <label for="flow-select" class="form-label">Select Flow Type</label>
+                                <select class="form-select" id="flow-select" required>
+                                    <option value="">Choose a flow...</option>
+                                </select>
+                                <div class="form-text" id="flow-description"></div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="initial-data" class="form-label">Initial Data (JSON)</label>
+                                <textarea class="form-control" id="initial-data" rows="3" placeholder='{"key": "value"}'></textarea>
+                                <div class="form-text">Optional: JSON object with initial flow data</div>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary w-100" id="start-flow-btn">
+                                ▶️ Start Flow
+                            </button>
+                        </form>
+                        
+                        <div id="flow-result" class="mt-3" style="display: none;">
+                            <div class="alert" id="flow-result-alert"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Current Flows Status -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <h6 class="mb-0">📊 Active Flows</h6>
+                    </div>
+                    <div class="card-body">
+                        <div id="active-flows">
+                            <p class="text-muted">No active flows</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Event Log Panel -->
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">📡 Real-time Event Stream</h5>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary" id="clear-log-btn">Clear Log</button>
+                            <button class="btn btn-sm btn-outline-secondary" id="auto-scroll-btn" data-enabled="true">
+                                Auto-scroll: ON
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="event-log" class="event-log"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

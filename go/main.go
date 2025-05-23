@@ -14,6 +14,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/web"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -24,6 +25,8 @@ func main() {
 	visualizeOnly := flag.Bool("visualize", false, "Only visualize the flow without running it")
 	enableObservability := flag.Bool("observability", false, "Enable observability with colorized console output")
 	observabilityVerbose := flag.Bool("observability-verbose", false, "Enable verbose observability output (implies -observability)")
+	webUI := flag.Bool("web", false, "Start web UI server instead of running flows directly")
+	webPort := flag.Int("web-port", 8080, "Port for web UI server")
 	
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -33,6 +36,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s -flow qa -observability        # Run QA flow with observability\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -flow branching -observability-verbose  # Run branching flow with verbose tracing\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -visualize -flow basic         # Just show the flow diagram\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -web                           # Start web UI server on port 8080\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -web -web-port 3000            # Start web UI server on port 3000\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nFlags:\n")
 		flag.PrintDefaults()
 	}
@@ -49,6 +54,14 @@ func main() {
 
 	// Check if observability should be enabled
 	useObservability := *enableObservability || *observabilityVerbose
+	
+	// If web UI is requested, start the web server
+	if *webUI {
+		if err := startWebServer(*webPort); err != nil {
+			log.Fatal().Err(err).Msg("Web server failed to start")
+		}
+		return
+	}
 	
 	// Create a runner with default options
 	// Create a closure with the runner reference
@@ -228,4 +241,51 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 	log.Info().Str("flowID", testFlow.ID()).Msg("Flow registered successfully")
 
 	return testFlow
+}
+
+// startWebServer starts the web UI server
+func startWebServer(port int) error {
+	log.Info().Int("port", port).Msg("🌐 Starting PocketFlow Web UI server...")
+
+	// Create a runner for the web server
+	runner := event.NewRunner(event.WithDebugMode(true))
+	if err := runner.Init(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize runner for web server")
+		return err
+	}
+
+	// Setup observability manager
+	obsManager := event.NewObservabilityManager(runner.Subscriber())
+	
+	// Add stdout observer for server-side logging
+	stdoutObserver := event.NewStdoutObserverWithOptions("server-console", true, false)
+	if err := obsManager.AddObserver(stdoutObserver); err != nil {
+		log.Error().Err(err).Msg("Failed to add stdout observer")
+	}
+
+	// Start the runner
+	_, cancel := runner.Start()
+	defer cancel()
+
+	// Start observability system
+	if err := obsManager.Start(); err != nil {
+		log.Error().Err(err).Msg("Failed to start observability system")
+	}
+	defer func() {
+		if err := obsManager.Stop(); err != nil {
+			log.Error().Err(err).Msg("Failed to stop observability system")
+		}
+	}()
+
+	// Create and start web server
+	server := web.NewServer(runner, obsManager)
+	
+	log.Info().Int("port", port).Msg("🎯 Web UI available at http://localhost:%d")
+	
+	if err := server.Start(port); err != nil {
+		log.Error().Err(err).Msg("Web server failed")
+		return err
+	}
+
+	return nil
 }

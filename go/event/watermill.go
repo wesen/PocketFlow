@@ -203,6 +203,9 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 		Str("topic", topic).
 		Str("handlerName", handlerName).
 		Msg("Registered node worker")
+	
+	// If router is already running, start the new handler
+	r.RunNewHandlers()
 }
 
 // RegisterAllNodeWorkers registers multiple node workers
@@ -303,6 +306,9 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 		Str("flowHandlerName", flowHandlerName).
 		Str("nodeCompletedHandlerName", nodeCompletedHandlerName).
 		Msg("Registered flow worker")
+	
+	// If router is already running, start the new handlers
+	r.RunNewHandlers()
 }
 
 // SetupFlowCompletionHandler sets up a handler for flow completed events
@@ -324,8 +330,26 @@ func (r *WatermillEventRouter) SetupFlowCompletionHandler(handler func(core.Flow
 				return nil, err
 			}
 			return nil, nil
-		},
-	)
+			},
+)
+}
+
+// IsRunning returns true if the router is running
+func (r *WatermillEventRouter) IsRunning() bool {
+	select {
+	case <-r.Router.Running():
+		return true
+	default:
+		return false
+	}
+}
+
+// RunNewHandlers runs any newly added handlers (needed when adding handlers to a running router)
+func (r *WatermillEventRouter) RunNewHandlers() error {
+	if r.IsRunning() {
+		go r.Router.RunHandlers(context.Background())
+	}
+	return nil
 }
 
 // SetupFlowFailureHandler sets up a handler for flow failed events
