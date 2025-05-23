@@ -89,11 +89,6 @@ type EventPublisher interface {
 	Publish(topic string, event interface{}) error
 }
 
-// EventSubscriber interface for subscribing to events
-type EventSubscriber interface {
-	Subscribe(topic string, handler func([]byte)) error
-}
-
 // FlowRegistry interface for managing flow definitions
 type FlowRegistry interface {
 	// Get a flow definition by ID

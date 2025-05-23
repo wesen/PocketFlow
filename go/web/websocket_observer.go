@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/observability"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/rs/zerolog/log"
 )
 
@@ -15,9 +16,11 @@ type WebSocketObserver struct {
 	server  *Server
 }
 
+var _ observability.Observer = &WebSocketObserver{}
+
 // NewWebSocketObserver creates a new WebSocket observer
 func NewWebSocketObserver(server *Server) observability.Observer {
-	return &WebSocketObserver{
+	return 	&WebSocketObserver{
 		name:    "websocket",
 		enabled: true,
 		server:  server,
@@ -53,14 +56,14 @@ func (w *WebSocketObserver) GetSubscribedTopics() []string {
 }
 
 // HandleMessage processes a message from a subscribed topic
-func (w *WebSocketObserver) HandleMessage(topic string, message []byte) error {
+func (w *WebSocketObserver) HandleMessage(topic string, msg *message.Message) error {
 	if !w.enabled {
 		return nil
 	}
 
 	// Parse the base message to get the message type
 	var baseMsg map[string]interface{}
-	if err := json.Unmarshal(message, &baseMsg); err != nil {
+	if err := json.Unmarshal(msg.Payload, &baseMsg); err != nil {
 		log.Error().Err(err).Msg("Failed to parse message in WebSocket observer")
 		return err
 	}

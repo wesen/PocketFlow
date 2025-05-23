@@ -4,23 +4,24 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/event"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/rs/zerolog/log"
 )
 
 // DefaultObservabilityManager implements ObservabilityManager
 type DefaultObservabilityManager struct {
-	observers  map[string]Observer
-	subscriber core.EventSubscriber
-	mutex      sync.RWMutex
-	started    bool
+	observers map[string]Observer
+	router    *event.WatermillEventRouter
+	mutex     sync.RWMutex
+	started   bool
 }
 
 // NewObservabilityManager creates a new observability manager
-func NewObservabilityManager(subscriber core.EventSubscriber) *DefaultObservabilityManager {
+func NewObservabilityManager(router *event.WatermillEventRouter) *DefaultObservabilityManager {
 	return &DefaultObservabilityManager{
-		observers:  make(map[string]Observer),
-		subscriber: subscriber,
+		observers: make(map[string]Observer),
+		router:    router,
 	}
 }
 
@@ -64,13 +65,17 @@ func (m *DefaultObservabilityManager) RemoveObserver(name string) error {
 // subscribeObserver subscribes an observer to its topics
 func (m *DefaultObservabilityManager) subscribeObserver(observer Observer) error {
 	for _, topic := range observer.GetSubscribedTopics() {
-		err := m.subscriber.Subscribe(topic, func(message []byte) {
-			if observer.IsEnabled() {
-				if err := observer.HandleMessage(topic, message); err != nil {
-					log.Error().Err(err).Str("observer", observer.GetName()).Str("topic", topic).Msg("Observer failed to handle message")
+		err := m.router.Router.AddNoPublisherHandler(
+			"observer", topic,
+			m.router.Subscriber,
+			func(msg *message.Message) error {
+				if observer.IsEnabled() {
+					if err := observer.HandleMessage(topic, msg); err != nil {
+						log.Error().Err(err).Str("observer", observer.GetName()).Str("topic", topic).Msg("Observer failed to handle message")
+					}
 				}
-			}
-		})
+				return nil
+			})
 		if err != nil {
 			return fmt.Errorf("failed to subscribe to topic '%s': %w", topic, err)
 		}

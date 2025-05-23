@@ -5,7 +5,8 @@ import (
 	"fmt"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
+	"github.com/The-Pocket/PocketFlow/go/event/node"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/rs/zerolog/log"
 )
@@ -150,13 +151,13 @@ func (h *AnswerHandler) DeclareOutputs() []semantic.SemanticOutput {
 // CreateQAFlow creates a simple question-answering flow
 func CreateQAFlow() core.Flow {
 	// Define node definitions
-	questionNodeDef := impl.NewNode("question", core.NodeParams{
+	questionNodeDef := 	node.NewNode("question", core.NodeParams{
 		"prompt": "What would you like to know about?",
 	})
-	answerNodeDef := impl.NewNode("answer", core.NodeParams{})
+	answerNodeDef := node.NewNode("answer", core.NodeParams{})
 
 	// Define flow using builder pattern
-	qaFlow := impl.NewFlowBuilder("qa_chain").
+	qaFlow := flow.NewFlowBuilder("qa_chain").
 		Begin(questionNodeDef).
 		Then(answerNodeDef).
 		Build()

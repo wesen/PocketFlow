@@ -4,7 +4,7 @@ package observability
 import (
 	"time"
 
-	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/ThreeDotsLabs/watermill/message"
 )
 
 // Observer interface for monitoring system events via subscription
@@ -22,7 +22,7 @@ type Observer interface {
 	GetSubscribedTopics() []string
 
 	// HandleMessage processes a message from a subscribed topic
-	HandleMessage(topic string, message []byte) error
+	HandleMessage(topic string, msg *message.Message) error
 }
 
 // ObservableEvent represents any event that can be observed
@@ -124,5 +124,5 @@ type FlowStatus struct {
 // ObservabilityRunner provides a simple interface to set up observability
 type ObservabilityRunner interface {
 	// SetupObservability configures observability for a runner
-	SetupObservability(subscriber core.EventSubscriber) (ObservabilityManager, error)
+	SetupObservability(subscriber message.Subscriber) (ObservabilityManager, error)
 }

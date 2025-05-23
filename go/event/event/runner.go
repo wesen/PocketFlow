@@ -1,33 +1,33 @@
 package event
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
 	"github.com/The-Pocket/PocketFlow/go/logger"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/errgroup"
 )
 
 // Runner encapsulates all the components needed to run PocketFlow
 // applications, providing a simplified API for setting up and executing flows.
 type Runner struct {
-	stateStore    semantic.StateStore
-	flowRegistry  core.FlowRegistry
-	publisher     core.EventPublisher
-	router        *WatermillEventRouter
+	stateStore   semantic.StateStore
+	flowRegistry core.FlowRegistry
+	publisher    core.EventPublisher
+	subscriber   message.Subscriber
+	// Separate router for each flow execution
+	flowRouters   map[string]*FlowEventRouter
+	nodeWorkers   map[string]core.NodeWorker
 	options       RunnerOptions
 	completeChans map[string]chan struct{}
 	muCompChans   sync.Mutex
+	muFlowRouters sync.RWMutex
 	useRedis      bool
 	redisAddr     string
 }
@@ -40,7 +40,7 @@ type RunnerOptions struct {
 	// Event handlers
 	OnFlowCompleted func(r *Runner, msg core.FlowCompletedMessage) error
 	OnFlowFailed    func(r *Runner, msg core.FlowFailedMessage) error
-	OnProgress      func(ProgressUpdateMessage) error
+	OnProgress      func(core.ProgressUpdateMessage) error
 
 	// Debug mode enables more verbose logging
 	DebugMode bool
@@ -60,7 +60,7 @@ func DefaultOptions() RunnerOptions {
 			log.Error().Str("flowExecutionID", msg.FlowExecutionID).Str("errorMessage", msg.ErrorMessage).Msg("❌ Flow failed!")
 			return nil
 		},
-		OnProgress: func(msg ProgressUpdateMessage) error {
+		OnProgress: func(msg core.ProgressUpdateMessage) error {
 			log.Info().
 				Str("status", msg.Status).
 				Float64("progress", msg.Progress).
@@ -96,7 +96,7 @@ func WithFlowFailedHandler(handler func(r *Runner, msg core.FlowFailedMessage) e
 }
 
 // WithProgressHandler configures the progress handler
-func WithProgressHandler(handler func(ProgressUpdateMessage) error) Option {
+func WithProgressHandler(handler func(core.ProgressUpdateMessage) error) Option {
 	return func(o *RunnerOptions) {
 		o.OnProgress = handler
 	}
@@ -121,6 +121,7 @@ func NewRunner(opts ...Option) *Runner {
 	return &Runner{
 		options:       options,
 		completeChans: make(map[string]chan struct{}),
+		flowRouters:   make(map[string]*FlowEventRouter),
 		useRedis:      false,
 	}
 }
@@ -137,6 +138,7 @@ func NewRunnerWithRedis(redisAddr string, opts ...Option) *Runner {
 	return &Runner{
 		options:       options,
 		completeChans: make(map[string]chan struct{}),
+		flowRouters:   make(map[string]*FlowEventRouter),
 		useRedis:      true,
 		redisAddr:     redisAddr,
 	}
@@ -154,24 +156,26 @@ func (r *Runner) Init() error {
 	log.Info().Msg("State store initialized")
 
 	// Create flow registry
-	r.flowRegistry = impl.NewInMemoryFlowRegistry()
+	r.flowRegistry = flow.NewInMemoryFlowRegistry()
 	log.Info().Msg("Flow registry created")
 
-	// Set up router based on messaging type
+	// Set up publisher based on messaging type
+	var subscriber message.Subscriber
 	if r.useRedis {
-		log.Info().Str("redisAddr", r.redisAddr).Msg("Setting up Redis Streams router")
-		r.router = NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+		log.Info().Str("redisAddr", r.redisAddr).Msg("Setting up Redis Streams publisher")
+		redisRouter := NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+		r.publisher = NewWatermillPublisher(redisRouter.Publisher)
+		subscriber = redisRouter.Subscriber
 	} else {
-		log.Info().Msg("Setting up in-memory router")
-		r.router = NewWatermillEventRouter(nil)
+		log.Info().Msg("Setting up in-memory publisher")
+		router := NewWatermillEventRouter(nil)
+		r.publisher = NewWatermillPublisher(router.Publisher)
+		subscriber = router.Subscriber
 	}
-	r.publisher = NewWatermillPublisher(r.router.Publisher)
-	log.Info().Msg("Event router and publisher initialized")
+	log.Info().Msg("Event publisher initialized")
 
-	// Set up custom handlers that also signal any waiting flows
-	r.router.SetupFlowCompletionHandler(r.wrapFlowCompletionHandler())
-	r.router.SetupFlowFailureHandler(r.wrapFlowFailureHandler())
-	r.router.SetupProgressHandler(r.options.OnProgress)
+	// Store subscriber for creating flow routers
+	r.subscriber = subscriber
 
 	return nil
 }
@@ -224,13 +228,15 @@ func (r *Runner) wrapFlowFailureHandler() func(core.FlowFailedMessage) error {
 
 // RegisterNodeWorker registers a node worker with the router
 func (r *Runner) RegisterNodeWorker(worker core.NodeWorker) *Runner {
-	r.router.RegisterNodeWorker(worker)
+	r.nodeWorkers[worker.NodeType()] = worker
 	return r
 }
 
 // RegisterNodeWorkers registers multiple node workers with the router
 func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) *Runner {
-	r.router.RegisterAllNodeWorkers(workers...)
+	for _, worker := range workers {
+		r.nodeWorkers[worker.NodeType()] = worker
+	}
 	return r
 }
 
@@ -240,60 +246,13 @@ func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
 	r.flowRegistry.RegisterFlow(flow.ID(), flow)
 
 	// Create and register a flow worker
-	flowWorker := impl.NewGenericFlowWorker(
-		flow.Type(),
-		r.publisher,
-		r.stateStore,
-		r.flowRegistry,
-	)
-	r.router.RegisterFlowWorker(flowWorker)
+	flowRouter, err := NewFlowEventRouter(flow, r.stateStore, r.publisher, r.subscriber, r.nodeWorkers, nil)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Error creating flow router")
+	}
+	r.flowRouters[flow.Type()] = flowRouter
 
 	return r
-}
-
-// Start starts the runner and sets up signal handling
-func (r *Runner) Run(ctx context.Context) error {
-	eg := errgroup.Group{}
-
-	// Start the router
-	eg.Go(func() error {
-		log.Info().Msg("Starting router")
-		if err := r.router.Start(ctx); err != nil {
-			log.Fatal().Err(err).Msg("Router error")
-		}
-		return nil
-	})
-
-	// Set up signal handling
-	eg.Go(func() error {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-		select {
-		case <-sigCh:
-			log.Warn().Msg("⚠️ Interrupted. Shutting down...")
-			return ctx.Err()
-		case <-ctx.Done():
-			// Context was cancelled elsewhere
-		}
-		return nil
-	})
-
-	return eg.Wait()
-}
-
-func (r *Runner) Start() (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		if err := r.Run(ctx); err != nil {
-			log.Fatal().Err(err).Msg("Error running runner")
-		}
-	}()
-
-	log.Info().Msg("Waiting for router to start")
-	<-r.router.Router.Running()
-	log.Info().Msg("Router started")
-	return ctx, cancel
 }
 
 // RunFlow executes a flow and returns its execution ID
@@ -357,7 +316,8 @@ func (r *Runner) WaitForFlow(flowExecutionID string) error {
 // Stop gracefully stops the runner
 func (r *Runner) Stop() error {
 	log.Info().Msg("Stopping runner")
-	return r.router.Stop()
+	// XXX needs to wait on all flow event routers
+	return nil
 }
 
 // GetSharedData gets the shared data for a flow execution
@@ -376,8 +336,8 @@ func (r *Runner) Publisher() core.EventPublisher {
 }
 
 // Subscriber returns the event subscriber (uses the same Subscriber as router)
-func (r *Runner) Subscriber() core.EventSubscriber {
-	return NewWatermillSubscriber(r.router.Subscriber)
+func (r *Runner) Subscriber() message.Subscriber {
+	return r.subscriber
 }
 
 // FlowRegistry returns the flow registry

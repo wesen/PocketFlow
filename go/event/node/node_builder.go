@@ -1,4 +1,4 @@
-package impl
+package node
 
 import (
 	"github.com/The-Pocket/PocketFlow/go/event/core"

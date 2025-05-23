@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,6 +19,8 @@ type StdoutObserver struct {
 	colorized bool
 	verbose   bool
 }
+
+var _ Observer = (*StdoutObserver)(nil)
 
 // NewStdoutObserver creates a new stdout observer
 func NewStdoutObserver(name string) *StdoutObserver {
@@ -79,13 +82,13 @@ func (o *StdoutObserver) GetSubscribedTopics() []string {
 }
 
 // HandleMessage processes a message from a subscribed topic
-func (o *StdoutObserver) HandleMessage(topic string, message []byte) error {
+func (o *StdoutObserver) HandleMessage(topic string, msg *message.Message) error {
 	if !o.enabled {
 		return nil
 	}
 
 	// Parse the message based on topic and message type
-	event, err := o.parseMessage(topic, message)
+	event, err := o.parseMessage(topic, msg.Payload)
 	if err != nil {
 		log.Debug().Err(err).Str("topic", topic).Msg("Failed to parse message for observability")
 		return nil // Don't fail on parse errors

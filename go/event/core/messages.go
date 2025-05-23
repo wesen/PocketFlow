@@ -29,6 +29,8 @@ const (
 const (
 	// Message sent to request node execution
 	MessageTypeExecRequested = "node.exec.requested"
+	// Message sent to request node execution (new format)
+	MessageTypeNodeExecRequested = "node.exec.requested"
 	// Message sent after node completes execution
 	MessageTypeNodeCompleted = "node.completed"
 	// Message sent after node fails execution
@@ -79,6 +81,7 @@ type FlowCompletedMessage struct {
 type FlowFailedMessage struct {
 	BaseMessage
 	FlowType     string `json:"flow_type"`
+	NodeID       string `json:"node_id,omitempty"`
 	ErrorMessage string `json:"error_message"`
 	ErrorDetails string `json:"error_details,omitempty"`
 	FailedNodeID string `json:"failed_node_id,omitempty"`
@@ -94,13 +97,23 @@ type ExecRequestedMessage struct {
 	Params   NodeParams `json:"params,omitempty"`
 }
 
+// Message sent to request node execution (new format)
+type NodeExecRequestedMessage struct {
+	BaseMessage
+	NodeType string     `json:"node_type"`
+	NodeID   string     `json:"node_id"`
+	Params   NodeParams `json:"params,omitempty"`
+}
+
 // Message sent after node completes execution
 type NodeCompletedMessage struct {
 	BaseMessage
-	NodeType string      `json:"node_type"`
-	NodeID   string      `json:"node_id"`
-	Action   string      `json:"action"`
-	Result   interface{} `json:"result,omitempty"`
+	NodeType     string      `json:"node_type"`
+	NodeID       string      `json:"node_id"`
+	Action       string      `json:"action"`
+	Result       interface{} `json:"result,omitempty"`
+	Success      bool        `json:"success"`
+	ErrorMessage string      `json:"error_message,omitempty"`
 }
 
 // Message sent after node fails execution

@@ -8,11 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/The-Pocket/PocketFlow/go/event"
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/event"
+	"github.com/The-Pocket/PocketFlow/go/event/examples"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
+	"github.com/The-Pocket/PocketFlow/go/event/mocks"
+	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -21,7 +24,7 @@ import (
 // Server provides HTTP and WebSocket endpoints for PocketFlow UI
 type Server struct {
 	runner     *event.Runner
-	obsManager event.ObservabilityManager
+	obsManager observability.ObservabilityManager
 	upgrader   websocket.Upgrader
 	clients    map[*websocket.Conn]bool
 	clientsMux sync.RWMutex
@@ -50,7 +53,7 @@ type FlowExecutionResponse struct {
 }
 
 // NewServer creates a new web server instance
-func NewServer(runner *event.Runner, obsManager event.ObservabilityManager) *Server {
+func NewServer(runner *event.Runner, obsManager observability.ObservabilityManager) *Server {
 	return &Server{
 		runner:     runner,
 		obsManager: obsManager,
@@ -274,28 +277,28 @@ func getAvailableFlows() map[string]FlowDefinition {
 // createBasicFlow creates a basic QA flow (same as in main.go)
 func (s *Server) createBasicFlow() core.Flow {
 	// Set up mock LLM client
-	mockLLM := event.NewMockLLMClient()
+	mockLLM := mocks.NewMockLLMClient()
 	mockLLM.AddResponse("Given the user's response", "This is a detailed explanation from the LLM based on your input.")
 
 	// Create node workers
-	questionNode := event.NewQuestionNodeWorker(
+	questionNode := examples.NewQuestionNodeWorker(
 		s.runner.Publisher(),
 		s.runner.StateStore(),
 		"What is your question?",
 	)
-	answerNode := event.NewAnswerNodeWorker(s.runner.Publisher(), s.runner.StateStore(), mockLLM)
+	answerNode := examples.NewAnswerNodeWorker(s.runner.Publisher(), s.runner.StateStore(), mockLLM)
 
 	// Register the nodes with the router
 	s.runner.RegisterNodeWorkers(questionNode, answerNode)
 
 	// Define nodes for the flow
-	questionNodeDef := questionNode.NewNode(event.NodeParams{
+	questionNodeDef := questionNode.NewNode(core.NodeParams{
 		"question": "What would you like to know about?",
 	})
-	answerNodeDef := answerNode.NewNode(event.NodeParams{})
+	answerNodeDef := answerNode.NewNode(core.NodeParams{})
 
 	// Define the flow
-	testFlow := impl.NewFlowBuilder("basic").
+	testFlow := flow.NewFlowBuilder("basic").
 		Begin(questionNodeDef).
 		Then(answerNodeDef).
 		Build()
@@ -368,8 +371,8 @@ func (s *Server) setupQANodeWorkers() {
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
 	// Create node workers using SimpleNode with semantic adapters
-	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
+	questionWorker := examples.NewSimpleNode("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	answerWorker := examples.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
 
 	// Register the node workers
 	s.runner.RegisterNodeWorkers(questionWorker, answerWorker)
@@ -378,14 +381,14 @@ func (s *Server) setupQANodeWorkers() {
 // setupBranchingNodeWorkers registers node workers for the branching flow
 func (s *Server) setupBranchingNodeWorkers() {
 	// Create a simple user input worker that simulates user input using semantic adapter
-	userInputWorker := event.NewSimpleNode("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	userInputWorker := examples.NewSimpleNode("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
 
 	// Create node workers for all branching flow node types using legacy semantic adapters
-	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	helpWorker := event.NewSimpleNode("help", &branching.HelpHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	generalWorker := event.NewSimpleNode("general", &branching.GeneralHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	intentClassifierWorker := examples.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	weatherWorker := examples.NewSimpleNode("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	timeWorker := examples.NewSimpleNode("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	helpWorker := examples.NewSimpleNode("help", &branching.HelpHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	generalWorker := examples.NewSimpleNode("general", &branching.GeneralHandler{}, s.runner.Publisher(), s.runner.StateStore())
 
 	// Register all the node workers
 	s.runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
@@ -398,21 +401,21 @@ func (s *Server) createDelayTestFlow() core.Flow {
 	s.runner.RegisterNodeWorkers(delayWorker)
 
 	// Create nodes with different delays
-	delay1 := delayWorker.NewNode(event.NodeParams{
+	delay1 := delayWorker.NewNode(core.NodeParams{
 		"delay_seconds": 2,
 		"message":       "First delay complete",
 	})
-	delay2 := delayWorker.NewNode(event.NodeParams{
+	delay2 := delayWorker.NewNode(core.NodeParams{
 		"delay_seconds": 3,
 		"message":       "Second delay complete",
 	})
-	delay3 := delayWorker.NewNode(event.NodeParams{
+	delay3 := delayWorker.NewNode(core.NodeParams{
 		"delay_seconds": 1,
 		"message":       "Final delay complete",
 	})
 
 	// Build the flow
-	delayFlow := impl.NewFlowBuilder("delay-test").
+	delayFlow := flow.NewFlowBuilder("delay-test").
 		Begin(delay1).
 		Then(delay2).
 		Then(delay3).

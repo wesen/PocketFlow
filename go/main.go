@@ -9,11 +9,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/The-Pocket/PocketFlow/go/event"
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/event"
+	"github.com/The-Pocket/PocketFlow/go/event/examples"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
+	"github.com/The-Pocket/PocketFlow/go/event/mocks"
+	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/The-Pocket/PocketFlow/go/web"
 	"github.com/rs/zerolog"
@@ -86,10 +89,10 @@ func main() {
 
 		// Demonstrate semantic data access
 		if semanticStore, ok := runner.StateStore().(semantic.StateStore); ok {
-			if userInput, exists := semanticStore.GetBySemantic("user_input"); exists {
+			if userInput, exists := semanticStore.GetBySemantic(completed.FlowExecutionID, "user_input"); exists {
 				log.Info().Interface("semantic_user_input", userInput).Msg("🧠 Semantic data accessed")
 			}
-			if response, exists := semanticStore.GetBySemantic("response"); exists {
+			if response, exists := semanticStore.GetBySemantic(completed.FlowExecutionID, "response"); exists {
 				log.Info().Interface("semantic_response", response).Msg("🧠 Semantic data accessed")
 			}
 		}
@@ -118,7 +121,7 @@ func main() {
 	}
 
 	// Setup observability if enabled
-	var obsManager event.ObservabilityManager
+	var obsManager observability.ObservabilityManager
 	if useObservability {
 		log.Info().Msg("🔍 Setting up observability...")
 
@@ -130,16 +133,15 @@ func main() {
 				log.Error().Err(err).Msg("Failed to create observability router")
 			} else {
 				// Create observability manager with separate subscriber for Redis
-				obsSubscriber := event.NewWatermillSubscriber(obsRouter.Subscriber)
-				obsManager = event.NewObservabilityManager(obsSubscriber)
+				obsManager = observability.NewObservabilityManager(obsRouter)
 			}
 		} else {
 			// For in-memory, use the same subscriber as the main runner
-			obsManager = event.NewObservabilityManager(runner.Subscriber())
+			obsManager = observability.NewObservabilityManager(runner.Subscriber())
 		}
 
 		// Add stdout observer with appropriate verbosity
-		stdoutObserver := event.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
+		stdoutObserver := observability.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
 		err := obsManager.AddObserver(stdoutObserver)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to add stdout observer")
@@ -148,7 +150,7 @@ func main() {
 		}
 
 		// Add flow tracer for detailed flow tracking
-		flowTracer := event.NewStdoutFlowTracer("flow_tracer")
+		flowTracer := observability.NewStdoutFlowTracer("flow_tracer")
 		err = obsManager.AddObserver(flowTracer)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to add flow tracer")
@@ -242,19 +244,19 @@ func main() {
 func setupBasicFlow(runner *event.Runner) core.Flow {
 	// Set up mock LLM client
 	log.Debug().Msg("Creating mock LLM client")
-	mockLLM := event.NewMockLLMClient()
+	mockLLM := mocks.NewMockLLMClient()
 	mockLLM.AddResponse("Given the user's response", "This is a detailed explanation from the LLM based on your input.")
 	log.Info().Msg("Mock LLM client initialized with predefined responses")
 
 	// Create node workers
 	log.Debug().Msg("Creating node workers")
 
-	questionNode := event.NewQuestionNodeWorker(
+	questionNode := examples.NewQuestionNodeWorker(
 		runner.Publisher(),
 		runner.StateStore(),
 		"What is your question?",
 	)
-	answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
+	answerNode := examples.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
 	log.Info().Msg("Node workers created")
 
 	// Register the nodes with the router
@@ -263,14 +265,14 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 
 	// Define nodes for the flow
 	log.Debug().Msg("Creating nodes for test flow")
-	questionNodeDef := questionNode.NewNode(event.NodeParams{
+	questionNodeDef := questionNode.NewNode(core.NodeParams{
 		"question": "What would you like to know about?",
 	})
-	answerNodeDef := answerNode.NewNode(event.NodeParams{})
+	answerNodeDef := answerNode.NewNode(core.NodeParams{})
 
 	// Define the flow
 	log.Debug().Msg("Defining test flow with builder pattern")
-	testFlow := impl.NewFlowBuilder("basic").
+	testFlow := flow.NewFlowBuilder("basic").
 		Begin(questionNodeDef).
 		Then(answerNodeDef).
 		Build()
@@ -289,8 +291,8 @@ func setupQANodeWorkers(runner *event.Runner) {
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
 	// Create node workers using SimpleNode directly with handlers
-	questionWorker := event.NewSimpleNode("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
-	answerWorker := event.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
+	questionWorker := examples.NewSimpleNode("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
+	answerWorker := examples.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
 
 	// Register the node workers
 	runner.RegisterNodeWorkers(questionWorker, answerWorker)
@@ -299,14 +301,14 @@ func setupQANodeWorkers(runner *event.Runner) {
 // setupBranchingNodeWorkers registers node workers for the branching flow
 func setupBranchingNodeWorkers(runner *event.Runner) {
 	// Create a simple user input worker that simulates user input
-	userInputWorker := event.NewSimpleNode("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
+	userInputWorker := examples.NewSimpleNode("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
 
 	// Create node workers for all branching flow node types using handlers directly
-	intentClassifierWorker := event.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
-	weatherWorker := event.NewSimpleNode("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
-	timeWorker := event.NewSimpleNode("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
-	helpWorker := event.NewSimpleNode("help", &branching.HelpHandler{}, runner.Publisher(), runner.StateStore())
-	generalWorker := event.NewSimpleNode("general", &branching.GeneralHandler{}, runner.Publisher(), runner.StateStore())
+	intentClassifierWorker := examples.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
+	weatherWorker := examples.NewSimpleNode("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
+	timeWorker := examples.NewSimpleNode("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
+	helpWorker := examples.NewSimpleNode("help", &branching.HelpHandler{}, runner.Publisher(), runner.StateStore())
+	generalWorker := examples.NewSimpleNode("general", &branching.GeneralHandler{}, runner.Publisher(), runner.StateStore())
 
 	// Register all the node workers
 	runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
@@ -370,9 +372,13 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 
 	// Create a runner for the web server (use Redis by default for web server)
 	var runner *event.Runner
+	var router *event.WatermillEventRouter
+
 	if useRedis {
+		router = event.NewWatermillEventRouterWithRedis(redisAddr, nil)
 		runner = event.NewRunnerWithRedis(redisAddr, event.WithDebugMode(true))
 	} else {
+		router = event.NewWatermillEventRouter(nil)
 		runner = event.NewRunner(event.WithDebugMode(true))
 	}
 	if err := runner.Init(); err != nil {
@@ -381,10 +387,10 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 	}
 
 	// Setup observability manager
-	obsManager := event.NewObservabilityManager(runner.Subscriber())
+	obsManager := observability.NewObservabilityManager(router)
 
 	// Add stdout observer for server-side logging
-	stdoutObserver := event.NewStdoutObserverWithOptions("server-console", true, false)
+	stdoutObserver := observability.NewStdoutObserverWithOptions("server-console", true, false)
 	if err := obsManager.AddObserver(stdoutObserver); err != nil {
 		log.Error().Err(err).Msg("Failed to add stdout observer")
 	}

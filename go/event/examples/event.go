@@ -1,12 +1,14 @@
 // Package event provides the main entry point for the PocketFlow Go implementation
-package event
+package examples
 
 import (
 	"fmt"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
+	"github.com/The-Pocket/PocketFlow/go/event/node"
 	"github.com/The-Pocket/PocketFlow/go/event/observability"
+	"github.com/The-Pocket/PocketFlow/go/event/store"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/rs/zerolog/log"
 )
@@ -20,7 +22,6 @@ type (
 	FlowWorker      = core.FlowWorker
 	FlowBuilder     = core.FlowBuilder
 	EventPublisher  = core.EventPublisher
-	EventSubscriber = core.EventSubscriber
 
 	FlowRegistry      = core.FlowRegistry
 	SimpleNodeHandler = core.SimpleNodeHandler
@@ -78,18 +79,18 @@ const (
 // Re-export implementation methods from impl package
 var (
 	// Flow factory methods
-	NewFlowBuilder = impl.NewFlowBuilder
+	NewFlowBuilder = flow.NewFlowBuilder
 
 	// State and Registry factory methods
-	NewSQLiteStateStore     = impl.NewSQLiteStateStore
-	NewInMemoryFlowRegistry = impl.NewInMemoryFlowRegistry
+	NewSQLiteStateStore     = store.NewSQLiteStateStore
+	NewInMemoryFlowRegistry = flow.NewInMemoryFlowRegistry
 
 	// Worker factory methods
 	// These are only accessible through the impl package to avoid redeclaration
 	// NewFlowOrchestrator = impl.NewFlowOrchestrator
 	// NewGenericFlowWorker = impl.NewGenericFlowWorker
-	NewSimpleNode  = impl.NewSimpleNode
-	NewNodeBuilder = impl.NewNodeBuilder
+	NewSimpleNode  = node.NewSimpleNode
+	NewNodeBuilder = node.NewNodeBuilder
 
 	// Observability factory methods
 	NewObservabilityManager      = observability.NewObservabilityManager

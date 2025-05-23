@@ -32,19 +32,12 @@ type WatermillPublisher struct {
 	publisher message.Publisher
 }
 
-// WatermillSubscriber implements the EventSubscriber interface using Watermill
-type WatermillSubscriber struct {
-	subscriber message.Subscriber
-}
+var _ core.EventPublisher = (*WatermillPublisher)(nil)
 
+// WatermillSubscriber implements the EventSubscriber interface using Watermill
 // NewWatermillPublisher creates a new publisher using Watermill
 func NewWatermillPublisher(publisher message.Publisher) *WatermillPublisher {
 	return &WatermillPublisher{publisher: publisher}
-}
-
-// NewWatermillSubscriber creates a new subscriber using Watermill
-func NewWatermillSubscriber(subscriber message.Subscriber) *WatermillSubscriber {
-	return &WatermillSubscriber{subscriber: subscriber}
 }
 
 // Publish publishes an event to a topic
@@ -99,29 +92,8 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 	return nil
 }
 
-// Subscribe subscribes to a topic with a handler function
-func (s *WatermillSubscriber) Subscribe(topic string, handler func([]byte)) error {
-	// Subscribe to the topic
-	messages, err := s.subscriber.Subscribe(context.Background(), topic)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
-	}
-
-	// Start a goroutine to handle messages
-	go func() {
-		for msg := range messages {
-			// Call the handler with the message payload
-			handler(msg.Payload)
-			// Ack the message
-			msg.Ack()
-		}
-	}()
-
-	return nil
-}
-
 // setupRouterMiddlewares configures useful middlewares for the router
-func setupRouterMiddlewares(router *message.Router, deadLetterPublisher message.Publisher, logger watermill.LoggerAdapter) {
+func SetupRouterMiddlewares(router *message.Router, deadLetterPublisher message.Publisher, logger watermill.LoggerAdapter) {
 	// Circuit breaker middleware - prevents cascading failures
 	circuitBreakerSettings := gobreaker.Settings{
 		Name:        "pocketflow_circuit_breaker",
@@ -215,7 +187,7 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 	}
 
 	// Setup middlewares for in-memory router (no dead letter queue for simplicity)
-	setupRouterMiddlewares(router, nil, logger)
+	SetupRouterMiddlewares(router, nil, logger)
 
 	return &WatermillEventRouter{
 		Publisher:   pubSub,
@@ -534,7 +506,7 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 	}
 
 	// Setup middlewares for Redis router with dead letter queue support
-	setupRouterMiddlewares(router, pubSub.Publisher, logger)
+	SetupRouterMiddlewares(router, pubSub.Publisher, logger)
 
 	return &WatermillEventRouter{
 		Publisher:   pubSub.Publisher,
@@ -578,10 +550,10 @@ func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAd
 	}
 
 	// Setup basic middlewares for observability router (no dead letter queue needed)
-	setupRouterMiddlewares(router, nil, logger)
+	SetupRouterMiddlewares(router, nil, logger)
 
 	return &WatermillEventRouter{
-		Publisher:   nil, // Observability only needs to subscribe
+		Publisher:   nil, // Observability only	 needs to subscribe
 		Subscriber:  subscriber,
 		Router:      router,
 		NodeWorkers: make(map[string]core.NodeWorker),

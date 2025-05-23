@@ -10,13 +10,13 @@ import (
 
 // StateStore interface for semantic data management
 type StateStore interface {
-	// Semantic data access
-	GetBySemantic(key string) (interface{}, bool)
-	SetSemantic(key string, value interface{}) error
+	// Semantic data access - now requires flowExecutionID
+	GetBySemantic(flowExecutionID, key string) (interface{}, bool)
+	SetSemantic(flowExecutionID, key string, value interface{}) error
 
-	// Metadata access
-	GetMetadata(key string) (*DataMetadata, bool)
-	GetAllMetadata() map[string]DataMetadata
+	// Metadata access - now requires flowExecutionID  
+	GetMetadata(flowExecutionID, key string) (*DataMetadata, bool)
+	GetAllMetadata(flowExecutionID string) map[string]DataMetadata
 
 	// Update with semantic registration
 	UpdateWithSemantic(flowExecutionID, nodeID string, value interface{}, semanticKeys []string, tags []string) error
@@ -56,15 +56,19 @@ type NodeContext struct {
 
 // SemanticDataAccessor with convenience methods
 type SemanticDataAccessor struct {
-	store StateStore
+	store           StateStore
+	flowExecutionID string
 }
 
-func NewSemanticDataAccessor(store StateStore) *SemanticDataAccessor {
-	return &SemanticDataAccessor{store: store}
+func NewSemanticDataAccessor(store StateStore, flowExecutionID string) *SemanticDataAccessor {
+	return &SemanticDataAccessor{
+		store:           store,
+		flowExecutionID: flowExecutionID,
+	}
 }
 
 func (sda *SemanticDataAccessor) UserInput() (string, error) {
-	value, exists := sda.store.GetBySemantic("user_input")
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "user_input")
 	if !exists {
 		return "", fmt.Errorf("user_input not found")
 	}
@@ -75,7 +79,7 @@ func (sda *SemanticDataAccessor) UserInput() (string, error) {
 }
 
 func (sda *SemanticDataAccessor) Intent() (string, error) {
-	value, exists := sda.store.GetBySemantic("intent")
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "intent")
 	if !exists {
 		return "", fmt.Errorf("intent not found")
 	}
@@ -86,7 +90,7 @@ func (sda *SemanticDataAccessor) Intent() (string, error) {
 }
 
 func (sda *SemanticDataAccessor) Response() (string, error) {
-	value, exists := sda.store.GetBySemantic("response")
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "response")
 	if !exists {
 		return "", fmt.Errorf("response not found")
 	}
@@ -97,7 +101,7 @@ func (sda *SemanticDataAccessor) Response() (string, error) {
 }
 
 func (sda *SemanticDataAccessor) GetString(key string) (string, error) {
-	value, exists := sda.store.GetBySemantic(key)
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, key)
 	if !exists {
 		return "", fmt.Errorf("key '%s' not found", key)
 	}
@@ -108,7 +112,7 @@ func (sda *SemanticDataAccessor) GetString(key string) (string, error) {
 }
 
 func (sda *SemanticDataAccessor) GetInt(key string) (int, error) {
-	value, exists := sda.store.GetBySemantic(key)
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, key)
 	if !exists {
 		return 0, fmt.Errorf("key '%s' not found", key)
 	}
@@ -119,7 +123,7 @@ func (sda *SemanticDataAccessor) GetInt(key string) (int, error) {
 }
 
 func (sda *SemanticDataAccessor) GetBool(key string) (bool, error) {
-	value, exists := sda.store.GetBySemantic(key)
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, key)
 	if !exists {
 		return false, fmt.Errorf("key '%s' not found", key)
 	}
@@ -130,7 +134,7 @@ func (sda *SemanticDataAccessor) GetBool(key string) (bool, error) {
 }
 
 func (sda *SemanticDataAccessor) GetFloat64(key string) (float64, error) {
-	value, exists := sda.store.GetBySemantic(key)
+	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, key)
 	if !exists {
 		return 0, fmt.Errorf("key '%s' not found", key)
 	}
@@ -195,31 +199,52 @@ func NewLayeredStateStore() *LayeredStateStore {
 	}
 }
 
-// GetBySemantic retrieves a value by semantic key
-func (lss *LayeredStateStore) GetBySemantic(key string) (interface{}, bool) {
+// GetBySemantic retrieves a value by semantic key for a specific flow execution
+func (lss *LayeredStateStore) GetBySemantic(flowExecutionID, key string) (interface{}, bool) {
 	lss.mutex.RLock()
 	defer lss.mutex.RUnlock()
 
-	value, exists := lss.globalState.SemanticLayer[key]
+	// Get flow-specific state
+	flowState, exists := lss.globalState.FlowData[flowExecutionID]
+	if !exists {
+		return nil, false
+	}
+
+	value, exists := flowState.SemanticLayer[key]
 	return value, exists
 }
 
-// SetSemantic stores a value with a semantic key
-func (lss *LayeredStateStore) SetSemantic(key string, value interface{}) error {
+// SetSemantic stores a value with a semantic key for a specific flow execution
+func (lss *LayeredStateStore) SetSemantic(flowExecutionID, key string, value interface{}) error {
 	lss.mutex.Lock()
 	defer lss.mutex.Unlock()
 
-	lss.globalState.SemanticLayer[key] = value
+	// Ensure flow state exists
+	if lss.globalState.FlowData[flowExecutionID] == nil {
+		lss.globalState.FlowData[flowExecutionID] = &LayeredSharedState{
+			SemanticLayer: make(map[string]interface{}),
+			Metadata:      make(map[string]DataMetadata),
+			FlowData:      make(map[string]*LayeredSharedState),
+		}
+	}
+
+	lss.globalState.FlowData[flowExecutionID].SemanticLayer[key] = value
 
 	return nil
 }
 
-// GetMetadata retrieves metadata for a semantic key
-func (lss *LayeredStateStore) GetMetadata(key string) (*DataMetadata, bool) {
+// GetMetadata retrieves metadata for a semantic key for a specific flow execution
+func (lss *LayeredStateStore) GetMetadata(flowExecutionID, key string) (*DataMetadata, bool) {
 	lss.mutex.RLock()
 	defer lss.mutex.RUnlock()
 
-	metadata, exists := lss.globalState.Metadata[key]
+	// Get flow-specific state
+	flowState, exists := lss.globalState.FlowData[flowExecutionID]
+	if !exists {
+		return nil, false
+	}
+
+	metadata, exists := flowState.Metadata[key]
 	if !exists {
 		return nil, false
 	}
@@ -227,30 +252,47 @@ func (lss *LayeredStateStore) GetMetadata(key string) (*DataMetadata, bool) {
 	return &metadata, true
 }
 
-// GetAllMetadata retrieves all metadata
-func (lss *LayeredStateStore) GetAllMetadata() map[string]DataMetadata {
+// GetAllMetadata retrieves all metadata for a specific flow execution
+func (lss *LayeredStateStore) GetAllMetadata(flowExecutionID string) map[string]DataMetadata {
 	lss.mutex.RLock()
 	defer lss.mutex.RUnlock()
 
 	result := make(map[string]DataMetadata)
-	for key, metadata := range lss.globalState.Metadata {
+	
+	// Get flow-specific state
+	flowState, exists := lss.globalState.FlowData[flowExecutionID]
+	if !exists {
+		return result
+	}
+
+	for key, metadata := range flowState.Metadata {
 		result[key] = metadata
 	}
 
 	return result
 }
 
-// UpdateWithSemantic updates state with semantic registration
+// UpdateWithSemantic updates state with semantic registration for a specific flow execution
 func (lss *LayeredStateStore) UpdateWithSemantic(flowExecutionID, nodeID string, value interface{}, semanticKeys []string, tags []string) error {
 	lss.mutex.Lock()
 	defer lss.mutex.Unlock()
 
+	// Ensure flow state exists
+	if lss.globalState.FlowData[flowExecutionID] == nil {
+		lss.globalState.FlowData[flowExecutionID] = &LayeredSharedState{
+			SemanticLayer: make(map[string]interface{}),
+			Metadata:      make(map[string]DataMetadata),
+			FlowData:      make(map[string]*LayeredSharedState),
+		}
+	}
+
+	flowState := lss.globalState.FlowData[flowExecutionID]
 	timestamp := time.Now()
 	valueType := reflect.TypeOf(value)
 
 	// Store value under all semantic keys
 	for _, key := range semanticKeys {
-		lss.globalState.SemanticLayer[key] = value
+		flowState.SemanticLayer[key] = value
 
 		// Create metadata
 		metadata := DataMetadata{
@@ -261,8 +303,7 @@ func (lss *LayeredStateStore) UpdateWithSemantic(flowExecutionID, nodeID string,
 			SemanticKeys:     semanticKeys,
 			FlowExecutionID:  flowExecutionID,
 		}
-		lss.globalState.Metadata[key] = metadata
-
+		flowState.Metadata[key] = metadata
 	}
 
 	return nil

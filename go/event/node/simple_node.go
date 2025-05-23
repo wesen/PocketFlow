@@ -1,4 +1,4 @@
-package impl
+package node
 
 import (
 	"encoding/json"
@@ -32,7 +32,7 @@ func NewSimpleNode(
 		publisher: publisher,
 		store:     store,
 	}
-}
+		}
 
 // NodeType returns the type of node this worker handles
 func (n *SimpleNode) NodeType() string {
@@ -130,7 +130,7 @@ func (n *SimpleNode) handleExecRequested(event core.ExecRequestedMessage) error 
 		NodeID:          event.NodeID,
 		NodeType:        event.NodeType,
 		Params:          event.Params,
-		SemanticData:    semantic.NewSemanticDataAccessor(n.store),
+		SemanticData:    semantic.NewSemanticDataAccessor(n.store, event.FlowExecutionID),
 	}
 	
 	// Execute the prep phase
