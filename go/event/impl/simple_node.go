@@ -287,9 +287,9 @@ func (n *SimpleNode) handleExecError(event core.ExecRequestedMessage, err error,
 		Str("nodeExecutionID", event.NodeExecutionID).
 		Msg("Node execution failed")
 	
-	// Publish error message
+	// Publish error message to node.failed topic instead of node's own topic
 	n.publisher.Publish(
-		fmt.Sprintf("node.%s", n.nodeType),
+		"node.failed",
 		core.ExecFailedMessage{
 			BaseMessage: core.BaseMessage{
 				MessageType:     core.MessageTypeExecFailed,

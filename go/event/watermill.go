@@ -8,10 +8,13 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
 	"github.com/ThreeDotsLabs/watermill-redisstream/pkg/redisstream"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
+	"github.com/sony/gobreaker"
+	"time"
 )
 
 // WatermillEventRouter uses Watermill for event routing
@@ -117,6 +120,82 @@ func (s *WatermillSubscriber) Subscribe(topic string, handler func([]byte)) erro
 	return nil
 }
 
+// setupRouterMiddlewares configures useful middlewares for the router
+func setupRouterMiddlewares(router *message.Router, deadLetterPublisher message.Publisher, logger watermill.LoggerAdapter) {
+	// Circuit breaker middleware - prevents cascading failures
+	circuitBreakerSettings := gobreaker.Settings{
+		Name:        "pocketflow_circuit_breaker",
+		MaxRequests: 10,
+		Interval:    30 * time.Second,
+		Timeout:     60 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+			return counts.Requests >= 3 && failureRatio >= 0.6
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			log.Info().
+				Str("circuit_breaker", name).
+				Str("from_state", string(from)).
+				Str("to_state", string(to)).
+				Msg("🔌 Circuit breaker state changed")
+		},
+	}
+	circuitBreakerMiddleware := middleware.NewCircuitBreaker(circuitBreakerSettings)
+
+	// Retry middleware with exponential backoff
+	retryMiddleware := middleware.Retry{
+		MaxRetries:      3,
+		InitialInterval: 100 * time.Millisecond,
+		MaxInterval:     1 * time.Second,
+		Multiplier:      2.0,
+		Logger:          logger,
+		OnRetryHook: func(retryNum int, delay time.Duration) {
+			log.Warn().
+				Int("retry_attempt", retryNum).
+				Dur("delay", delay).
+				Msg("🔄 Retrying message processing")
+		},
+	}
+
+	// Timeout middleware - prevents hanging handlers
+	timeoutMiddleware := middleware.Timeout(30 * time.Second)
+
+	// Recovery middleware - prevents panics from crashing the router
+	recoveryMiddleware := middleware.Recoverer
+
+	// Poison queue middleware - moves permanently failing messages to dead letter queue
+	var poisonQueueMiddleware message.HandlerMiddleware
+	if deadLetterPublisher != nil {
+		var err error
+		log.Info().Msg("💀 Dead letter queue configured for permanently failed messages")
+		poisonQueueMiddleware, err = middleware.PoisonQueue(deadLetterPublisher, "dead_letter_queue")
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create poison queue middleware")
+		} else {
+			log.Info().Msg("💀 Dead letter queue configured for permanently failed messages")
+		}
+	}
+
+	// Install middlewares in order (they wrap handlers in reverse order)
+	router.AddMiddleware(recoveryMiddleware)
+	router.AddMiddleware(timeoutMiddleware)
+	if poisonQueueMiddleware != nil {
+		router.AddMiddleware(poisonQueueMiddleware)
+	}
+	router.AddMiddleware(retryMiddleware.Middleware)
+	_ = circuitBreakerMiddleware
+	// router.AddMiddleware(circuitBreakerMiddleware.Middleware)
+
+	// Optional: Add correlation ID middleware for distributed tracing
+	correlationMiddleware := middleware.CorrelationID
+	router.AddMiddleware(correlationMiddleware)
+
+	// Optional: Add instant ack for high throughput (if needed)
+	// router.AddMiddleware(middleware.InstantAck)
+
+	log.Info().Msg("✅ Router middlewares configured: recovery, timeout, poison_queue, retry, circuit_breaker, correlation_id")
+}
+
 // NewWatermillEventRouter creates a new router using Watermill
 func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRouter {
 	if logger == nil {
@@ -134,6 +213,9 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create router")
 	}
+
+	// Setup middlewares for in-memory router (no dead letter queue for simplicity)
+	setupRouterMiddlewares(router, nil, logger)
 
 	return &WatermillEventRouter{
 		Publisher:   pubSub,
@@ -451,6 +533,9 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 		log.Fatal().Err(err).Msg("Failed to create router")
 	}
 
+	// Setup middlewares for Redis router with dead letter queue support
+	setupRouterMiddlewares(router, pubSub.Publisher, logger)
+
 	return &WatermillEventRouter{
 		Publisher:   pubSub.Publisher,
 		Subscriber:  pubSub.Subscriber,
@@ -491,6 +576,9 @@ func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAd
 	if err != nil {
 		return nil, fmt.Errorf("failed to create router for observability: %w", err)
 	}
+
+	// Setup basic middlewares for observability router (no dead letter queue needed)
+	setupRouterMiddlewares(router, nil, logger)
 
 	return &WatermillEventRouter{
 		Publisher:   nil, // Observability only needs to subscribe

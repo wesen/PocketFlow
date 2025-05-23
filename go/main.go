@@ -160,14 +160,14 @@ func main() {
 	case "qa":
 		flowName = "Question-Answering Flow"
 		flow = qa.CreateQAFlow()
-		setupQANodeWorkers(runner)
 		runner.RegisterFlow(flow)
+		setupQANodeWorkers(runner)
 
 	case "branching":
 		flowName = "Branching Intent Flow"
 		flow = branching.CreateBranchingFlow()
-		setupBranchingNodeWorkers(runner)
 		runner.RegisterFlow(flow)
+		setupBranchingNodeWorkers(runner)
 
 	default:
 		log.Fatal().Str("flowType", *flowType).Msg("Unknown flow type")
@@ -328,6 +328,8 @@ func (h *CLIUserInputHandler) Exec(ctx core.NodeContext, prepResult interface{})
 // Post handles the post-processing and determines next action
 func (h *CLIUserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	userInput := execResult.(string)
+	// Store the user input with a semantic key that other nodes can find
+	ctx.SharedData["user_input"] = userInput
 	return "default", userInput, nil
 }
 

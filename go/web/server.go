@@ -187,12 +187,12 @@ func (s *Server) handleStartFlow(w http.ResponseWriter, r *http.Request) {
 		flow = s.createBasicFlow()
 	case "qa":
 		flow = qa.CreateQAFlow()
-		s.setupQANodeWorkers()
 		s.runner.RegisterFlow(flow)
+		s.setupQANodeWorkers()
 	case "branching":
 		flow = branching.CreateBranchingFlow()
-		s.setupBranchingNodeWorkers()
 		s.runner.RegisterFlow(flow)
+		s.setupBranchingNodeWorkers()
 	case "delay-test":
 		flow = s.createDelayTestFlow()
 	default:
@@ -331,6 +331,8 @@ func (h *UserInputHandler) Exec(ctx core.NodeContext, prepResult interface{}) (i
 // Post handles the post-processing and determines next action
 func (h *UserInputHandler) Post(ctx core.NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
 	userInput := execResult.(string)
+	// Store the user input with a semantic key that other nodes can find
+	ctx.SharedData["user_input"] = userInput
 	return "default", userInput, nil
 }
 
