@@ -7,11 +7,8 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 )
 
-// Observer interface for monitoring system events
+// Observer interface for monitoring system events via subscription
 type Observer interface {
-	// Observe processes an event and optionally transforms it
-	Observe(event ObservableEvent) error
-
 	// GetName returns the observer's identifier
 	GetName() string
 
@@ -20,6 +17,12 @@ type Observer interface {
 
 	// SetEnabled enables or disables this observer
 	SetEnabled(enabled bool)
+
+	// GetSubscribedTopics returns the list of topics this observer wants to subscribe to
+	GetSubscribedTopics() []string
+
+	// HandleMessage processes a message from a subscribed topic
+	HandleMessage(topic string, message []byte) error
 }
 
 // ObservableEvent represents any event that can be observed
@@ -74,16 +77,13 @@ type NodeTracer interface {
 	OnNodeFailed(event NodeFailedEvent) error
 }
 
-// ObservabilityManager coordinates multiple observers
+// ObservabilityManager coordinates multiple observers via subscriptions
 type ObservabilityManager interface {
-	// AddObserver adds an observer to the manager
+	// AddObserver adds an observer and subscribes it to its topics
 	AddObserver(observer Observer) error
 
-	// RemoveObserver removes an observer from the manager
+	// RemoveObserver removes an observer and unsubscribes it
 	RemoveObserver(name string) error
-
-	// NotifyObservers sends an event to all enabled observers
-	NotifyObservers(event ObservableEvent) error
 
 	// GetObserver returns an observer by name
 	GetObserver(name string) Observer
@@ -94,11 +94,14 @@ type ObservabilityManager interface {
 	// EnableObserver enables an observer by name
 	EnableObserver(name string) error
 
-	// DisableObserver disables an observer by name
+	// DisableObserver disables an observer by name  
 	DisableObserver(name string) error
 
-	// CreateEventFromMessage creates an observable event from a PocketFlow message
-	CreateEventFromMessage(msg interface{}) (ObservableEvent, error)
+	// Start begins the observability system
+	Start() error
+
+	// Stop shuts down the observability system
+	Stop() error
 }
 
 // FlowStatus represents the current status of a flow execution
@@ -118,11 +121,8 @@ type FlowStatus struct {
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// EventPublisherObserver wraps an EventPublisher to emit observable events
-type EventPublisherObserver interface {
-	core.EventPublisher
-	ObservabilityManager
-
-	// PublishWithObservability publishes an event and notifies observers
-	PublishWithObservability(topic string, event interface{}) error
+// ObservabilityRunner provides a simple interface to set up observability
+type ObservabilityRunner interface {
+	// SetupObservability configures observability for a runner
+	SetupObservability(subscriber core.EventSubscriber) (ObservabilityManager, error)
 }

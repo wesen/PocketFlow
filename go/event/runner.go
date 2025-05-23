@@ -352,6 +352,11 @@ func (r *Runner) Publisher() core.EventPublisher {
 	return r.publisher
 }
 
+// Subscriber returns the event subscriber (uses the same PubSub as publisher)
+func (r *Runner) Subscriber() core.EventSubscriber {
+	return NewWatermillSubscriber(r.router.PubSub)
+}
+
 // FlowRegistry returns the flow registry
 func (r *Runner) FlowRegistry() core.FlowRegistry {
 	return r.flowRegistry

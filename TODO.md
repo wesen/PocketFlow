@@ -1,0 +1,6 @@
+- [ ] Continue making sure that the observer is not a publisher proxy, but is just registering as subscriber
+- [ ] Add a websocket observer output with streaming events
+- [ ] Make sure the framework actually works
+- [ ] Use worktree-tui to checkout a workspace with geppetto and pocketflow
+- [ ] Add a real tool-calling LLM node
+- [ ] Add nodes to extract structured data from LLM calls, etc...

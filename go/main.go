@@ -14,7 +14,6 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
-	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -82,15 +81,15 @@ func main() {
 	}
 
 	// Setup observability if enabled
-	var observablePublisher *observability.ObservableEventPublisher
+	var obsManager event.ObservabilityManager
 	if useObservability {
 		log.Info().Msg("🔍 Setting up observability...")
 		
-		// Create observability manager
-		obsManager := observability.NewObservabilityManager()
+		// Create observability manager with the runner's subscriber
+		obsManager = event.NewObservabilityManager(runner.Subscriber())
 		
 		// Add stdout observer with appropriate verbosity
-		stdoutObserver := observability.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
+		stdoutObserver := event.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
 		err := obsManager.AddObserver(stdoutObserver)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to add stdout observer")
@@ -99,16 +98,13 @@ func main() {
 		}
 		
 		// Add flow tracer for detailed flow tracking
-		flowTracer := observability.NewStdoutFlowTracer("flow_tracer")
+		flowTracer := event.NewStdoutFlowTracer("flow_tracer")
 		err = obsManager.AddObserver(flowTracer)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to add flow tracer")
 		} else {
 			log.Info().Msg("✓ Added flow tracer for status tracking")
 		}
-		
-		// Wrap the runner's publisher with observability
-		observablePublisher = observability.NewObservableEventPublisher(runner.Publisher(), obsManager)
 		
 		log.Info().Int("observers", len(obsManager.ListObservers())).Msg("🎯 Observability system ready")
 	}
@@ -120,7 +116,7 @@ func main() {
 	switch *flowType {
 	case "basic":
 		flowName = "Basic QA Flow"
-		flow = setupBasicFlow(runner, observablePublisher)
+		flow = setupBasicFlow(runner)
 
 	case "qa":
 		flowName = "Question-Answering Flow"
@@ -147,6 +143,20 @@ func main() {
 	// Start the runner
 	_, cancel := runner.Start()
 	defer cancel()
+
+	// Start observability system if enabled
+	if useObservability && obsManager != nil {
+		if err := obsManager.Start(); err != nil {
+			log.Error().Err(err).Msg("Failed to start observability system")
+		} else {
+			log.Info().Msg("🎯 Observability system started and subscribed to topics")
+		}
+		defer func() {
+			if err := obsManager.Stop(); err != nil {
+				log.Error().Err(err).Msg("Failed to stop observability system")
+			}
+		}()
+	}
 
 	log.Info().Str("flowName", flowName).Msg("🚀 Starting PocketFlow Go example...")
 
@@ -177,7 +187,7 @@ func main() {
 	log.Info().Msg("PocketFlow execution completed")
 }
 
-func setupBasicFlow(runner *event.Runner, observablePublisher *observability.ObservableEventPublisher) core.Flow {
+func setupBasicFlow(runner *event.Runner) core.Flow {
 	// Set up mock LLM client
 	log.Debug().Msg("Creating mock LLM client")
 	mockLLM := event.NewMockLLMClient()
@@ -187,19 +197,12 @@ func setupBasicFlow(runner *event.Runner, observablePublisher *observability.Obs
 	// Create node workers
 	log.Debug().Msg("Creating node workers")
 	
-	// Use observable publisher if available, otherwise use the regular publisher
-	var publisher core.EventPublisher = runner.Publisher()
-	if observablePublisher != nil {
-		publisher = observablePublisher
-		log.Info().Msg("🔍 Using observable publisher for enhanced tracing")
-	}
-	
 	questionNode := event.NewQuestionNodeWorker(
-		publisher,
+		runner.Publisher(),
 		runner.StateStore(),
 		"What is your question?",
 	)
-	answerNode := event.NewAnswerNodeWorker(publisher, runner.StateStore(), mockLLM)
+	answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
 	log.Info().Msg("Node workers created")
 
 	// Register the nodes with the router

@@ -43,7 +43,6 @@ type (
 	FlowTracer             = observability.FlowTracer
 	NodeTracer             = observability.NodeTracer
 	ObservabilityManager   = observability.ObservabilityManager
-	EventPublisherObserver = observability.EventPublisherObserver
 	FlowStatus             = observability.FlowStatus
 
 	// Observable events
@@ -96,7 +95,6 @@ var (
 	NewStdoutObserver = observability.NewStdoutObserver
 	NewStdoutObserverWithOptions = observability.NewStdoutObserverWithOptions
 	NewStdoutFlowTracer = observability.NewStdoutFlowTracer
-	NewObservableEventPublisher = observability.NewObservableEventPublisher
 )
 
 // For backward compatibility, provide access to these types

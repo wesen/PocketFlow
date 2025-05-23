@@ -10,18 +10,21 @@ import (
 
 // DefaultObservabilityManager implements ObservabilityManager
 type DefaultObservabilityManager struct {
-	observers map[string]Observer
-	mutex     sync.RWMutex
+	observers  map[string]Observer
+	subscriber core.EventSubscriber
+	mutex      sync.RWMutex
+	started    bool
 }
 
 // NewObservabilityManager creates a new observability manager
-func NewObservabilityManager() *DefaultObservabilityManager {
+func NewObservabilityManager(subscriber core.EventSubscriber) *DefaultObservabilityManager {
 	return &DefaultObservabilityManager{
-		observers: make(map[string]Observer),
+		observers:  make(map[string]Observer),
+		subscriber: subscriber,
 	}
 }
 
-// AddObserver adds an observer to the manager
+// AddObserver adds an observer and subscribes it to its topics
 func (m *DefaultObservabilityManager) AddObserver(observer Observer) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -32,6 +35,14 @@ func (m *DefaultObservabilityManager) AddObserver(observer Observer) error {
 	}
 
 	m.observers[name] = observer
+
+	// Subscribe to the observer's topics if the system is started
+	if m.started {
+		if err := m.subscribeObserver(observer); err != nil {
+			return fmt.Errorf("failed to subscribe observer '%s': %w", name, err)
+		}
+	}
+
 	log.Debug().Str("observer", name).Msg("Added observer")
 	return nil
 }
@@ -50,25 +61,20 @@ func (m *DefaultObservabilityManager) RemoveObserver(name string) error {
 	return nil
 }
 
-// NotifyObservers sends an event to all enabled observers
-func (m *DefaultObservabilityManager) NotifyObservers(event ObservableEvent) error {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	var errs []error
-	for name, observer := range m.observers {
-		if observer.IsEnabled() {
-			if err := observer.Observe(event); err != nil {
-				log.Error().Err(err).Str("observer", name).Msg("Observer failed to process event")
-				errs = append(errs, fmt.Errorf("observer '%s': %w", name, err))
+// subscribeObserver subscribes an observer to its topics
+func (m *DefaultObservabilityManager) subscribeObserver(observer Observer) error {
+	for _, topic := range observer.GetSubscribedTopics() {
+		err := m.subscriber.Subscribe(topic, func(message []byte) {
+			if observer.IsEnabled() {
+				if err := observer.HandleMessage(topic, message); err != nil {
+					log.Error().Err(err).Str("observer", observer.GetName()).Str("topic", topic).Msg("Observer failed to handle message")
+				}
 			}
+		})
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to topic '%s': %w", topic, err)
 		}
 	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("one or more observers failed: %v", errs)
-	}
-
 	return nil
 }
 
@@ -122,112 +128,44 @@ func (m *DefaultObservabilityManager) DisableObserver(name string) error {
 	return nil
 }
 
-// CreateEventFromMessage creates an observable event from a PocketFlow message
-func (m *DefaultObservabilityManager) CreateEventFromMessage(msg interface{}) (ObservableEvent, error) {
-	switch message := msg.(type) {
-	case *core.FlowStartRequestedMessage:
-		return CreateFlowStartedEvent(message), nil
-	case *core.FlowCompletedMessage:
-		return CreateFlowCompletedEvent(message), nil
-	case *core.FlowFailedMessage:
-		return CreateFlowFailedEvent(message), nil
-	case *core.ExecRequestedMessage:
-		return CreateNodeStartedEvent(message), nil
-	case *core.NodeCompletedMessage:
-		return CreateNodeCompletedEvent(message), nil
-	case *core.ExecFailedMessage:
-		return CreateNodeFailedEvent(message), nil
-	case *core.ProgressUpdateMessage:
-		return CreateProgressUpdateEvent(message), nil
-	default:
-		return nil, fmt.Errorf("unsupported message type: %T", msg)
+// Start begins the observability system
+func (m *DefaultObservabilityManager) Start() error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.started {
+		return fmt.Errorf("observability manager already started")
 	}
+
+	// Subscribe all observers to their topics
+	for _, observer := range m.observers {
+		if err := m.subscribeObserver(observer); err != nil {
+			return fmt.Errorf("failed to subscribe observer '%s': %w", observer.GetName(), err)
+		}
+	}
+
+	m.started = true
+	log.Info().Msg("Observability system started")
+	return nil
+}
+
+// Stop shuts down the observability system
+func (m *DefaultObservabilityManager) Stop() error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if !m.started {
+		return nil
+	}
+
+	// Note: We don't unsubscribe here because the EventSubscriber interface
+	// doesn't provide an unsubscribe method. This is typically handled
+	// by the underlying message system when it shuts down.
+
+	m.started = false
+	log.Info().Msg("Observability system stopped")
+	return nil
 }
 
 // Ensure DefaultObservabilityManager implements ObservabilityManager interface
 var _ ObservabilityManager = (*DefaultObservabilityManager)(nil)
-
-// ObservableEventPublisher wraps an EventPublisher to emit observable events
-type ObservableEventPublisher struct {
-	publisher core.EventPublisher
-	manager   ObservabilityManager
-}
-
-// NewObservableEventPublisher creates a new observable event publisher
-func NewObservableEventPublisher(publisher core.EventPublisher, manager ObservabilityManager) *ObservableEventPublisher {
-	return &ObservableEventPublisher{
-		publisher: publisher,
-		manager:   manager,
-	}
-}
-
-// Publish publishes an event through the wrapped publisher
-func (p *ObservableEventPublisher) Publish(topic string, event interface{}) error {
-	return p.publisher.Publish(topic, event)
-}
-
-// PublishWithObservability publishes an event and notifies observers
-func (p *ObservableEventPublisher) PublishWithObservability(topic string, event interface{}) error {
-	// First publish the event normally
-	err := p.publisher.Publish(topic, event)
-	if err != nil {
-		return err
-	}
-
-	// Create observable event and notify observers
-	observableEvent, err := p.manager.CreateEventFromMessage(event)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not create observable event, skipping observation")
-		return nil // Don't fail the publish operation
-	}
-
-	// Notify observers (don't fail publish if observers fail)
-	if err := p.manager.NotifyObservers(observableEvent); err != nil {
-		log.Error().Err(err).Msg("Failed to notify observers")
-	}
-
-	return nil
-}
-
-// AddObserver adds an observer to the manager
-func (p *ObservableEventPublisher) AddObserver(observer Observer) error {
-	return p.manager.AddObserver(observer)
-}
-
-// RemoveObserver removes an observer from the manager
-func (p *ObservableEventPublisher) RemoveObserver(name string) error {
-	return p.manager.RemoveObserver(name)
-}
-
-// NotifyObservers sends an event to all enabled observers
-func (p *ObservableEventPublisher) NotifyObservers(event ObservableEvent) error {
-	return p.manager.NotifyObservers(event)
-}
-
-// GetObserver returns an observer by name
-func (p *ObservableEventPublisher) GetObserver(name string) Observer {
-	return p.manager.GetObserver(name)
-}
-
-// ListObservers returns all observers
-func (p *ObservableEventPublisher) ListObservers() []Observer {
-	return p.manager.ListObservers()
-}
-
-// EnableObserver enables an observer by name
-func (p *ObservableEventPublisher) EnableObserver(name string) error {
-	return p.manager.EnableObserver(name)
-}
-
-// DisableObserver disables an observer by name
-func (p *ObservableEventPublisher) DisableObserver(name string) error {
-	return p.manager.DisableObserver(name)
-}
-
-// CreateEventFromMessage creates an observable event from a PocketFlow message
-func (p *ObservableEventPublisher) CreateEventFromMessage(msg interface{}) (ObservableEvent, error) {
-	return p.manager.CreateEventFromMessage(msg)
-}
-
-// Ensure ObservableEventPublisher implements EventPublisherObserver interface
-var _ EventPublisherObserver = (*ObservableEventPublisher)(nil)

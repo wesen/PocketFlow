@@ -1,11 +1,13 @@
 package observability
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/rs/zerolog/log"
 )
 
@@ -62,15 +64,105 @@ func (o *StdoutObserver) SetVerbose(verbose bool) {
 	o.verbose = verbose
 }
 
-// Observe processes an event and outputs it to stdout
-func (o *StdoutObserver) Observe(event ObservableEvent) error {
+// GetSubscribedTopics returns the topics this observer subscribes to
+func (o *StdoutObserver) GetSubscribedTopics() []string {
+	return []string{
+		"flow.completed",
+		"flow.failed", 
+		"node.completed",
+		"node.exec.failed",
+		"progress",
+		// Subscribe to specific flow and node types as well
+		"flow.*",
+		"node.*",
+	}
+}
+
+// HandleMessage processes a message from a subscribed topic
+func (o *StdoutObserver) HandleMessage(topic string, message []byte) error {
 	if !o.enabled {
 		return nil
 	}
 
-	output := o.formatEvent(event)
-	_, err := fmt.Fprintln(os.Stdout, output)
-	return err
+	// Parse the message based on topic and message type
+	event, err := o.parseMessage(topic, message)
+	if err != nil {
+		log.Debug().Err(err).Str("topic", topic).Msg("Failed to parse message for observability")
+		return nil // Don't fail on parse errors
+	}
+
+	if event != nil {
+		output := o.formatEvent(event)
+		_, err := fmt.Fprintln(os.Stdout, output)
+		return err
+	}
+
+	return nil
+}
+
+// parseMessage converts a raw message to an ObservableEvent
+func (o *StdoutObserver) parseMessage(topic string, message []byte) (ObservableEvent, error) {
+	// Try to parse as a base message first to get the message type
+	var baseMsg core.BaseMessage
+	if err := json.Unmarshal(message, &baseMsg); err != nil {
+		return nil, fmt.Errorf("failed to parse base message: %w", err)
+	}
+
+	// Create the appropriate observable event based on message type
+	switch baseMsg.MessageType {
+	case "flow.start.requested":
+		var msg core.FlowStartRequestedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowStartedEvent(&msg), nil
+
+	case "flow.completed":
+		var msg core.FlowCompletedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowCompletedEvent(&msg), nil
+
+	case "flow.failed":
+		var msg core.FlowFailedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowFailedEvent(&msg), nil
+
+	case "node.exec.requested":
+		var msg core.ExecRequestedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeStartedEvent(&msg), nil
+
+	case "node.completed":
+		var msg core.NodeCompletedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeCompletedEvent(&msg), nil
+
+	case "node.exec.failed":
+		var msg core.ExecFailedMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeFailedEvent(&msg), nil
+
+	case "progress.update":
+		var msg core.ProgressUpdateMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			return nil, err
+		}
+		return CreateProgressUpdateEvent(&msg), nil
+
+	default:
+		// Unknown message type, skip silently
+		return nil, nil
+	}
 }
 
 // formatEvent formats an observable event for display
@@ -324,13 +416,17 @@ func (t *StdoutFlowTracer) OnFlowStarted(event FlowStartedEvent) error {
 		NodesExecuted:    0,
 	}
 	
-	// Log to stdout
-	err := t.Observe(&event)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to observe flow started event")
+	// Log to stdout via the base observer
+	if t.StdoutObserver.enabled {
+		output := t.StdoutObserver.formatEvent(&event)
+		_, err := fmt.Fprintln(os.Stdout, output)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to output flow started event")
+		}
+		return err
 	}
 	
-	return err
+	return nil
 }
 
 // OnFlowCompleted handles flow completion events
@@ -346,13 +442,17 @@ func (t *StdoutFlowTracer) OnFlowCompleted(event FlowCompletedEvent) error {
 		status.FinalResult = event.FinalResult
 	}
 	
-	// Log to stdout
-	err := t.Observe(&event)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to observe flow completed event")
+	// Log to stdout via the base observer
+	if t.StdoutObserver.enabled {
+		output := t.StdoutObserver.formatEvent(&event)
+		_, err := fmt.Fprintln(os.Stdout, output)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to output flow completed event")
+		}
+		return err
 	}
 	
-	return err
+	return nil
 }
 
 // OnFlowFailed handles flow failure events
@@ -366,13 +466,17 @@ func (t *StdoutFlowTracer) OnFlowFailed(event FlowFailedEvent) error {
 		status.ErrorMessage = event.ErrorMessage
 	}
 	
-	// Log to stdout
-	err := t.Observe(&event)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to observe flow failed event")
+	// Log to stdout via the base observer
+	if t.StdoutObserver.enabled {
+		output := t.StdoutObserver.formatEvent(&event)
+		_, err := fmt.Fprintln(os.Stdout, output)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to output flow failed event")
+		}
+		return err
 	}
 	
-	return err
+	return nil
 }
 
 // GetFlowStatus returns the current status of a flow

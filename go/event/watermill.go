@@ -26,9 +26,19 @@ type WatermillPublisher struct {
 	pubSub *gochannel.GoChannel
 }
 
+// WatermillSubscriber implements the EventSubscriber interface using Watermill
+type WatermillSubscriber struct {
+	pubSub *gochannel.GoChannel
+}
+
 // NewWatermillPublisher creates a new publisher using Watermill
 func NewWatermillPublisher(pubSub *gochannel.GoChannel) *WatermillPublisher {
 	return &WatermillPublisher{pubSub: pubSub}
+}
+
+// NewWatermillSubscriber creates a new subscriber using Watermill
+func NewWatermillSubscriber(pubSub *gochannel.GoChannel) *WatermillSubscriber {
+	return &WatermillSubscriber{pubSub: pubSub}
 }
 
 // Publish publishes an event to a topic
@@ -79,6 +89,27 @@ func (p *WatermillPublisher) Publish(topic string, event interface{}) error {
 		Str("messageType", messageType).
 		Str("messageID", messageUUID).
 		Msg("Publisher successfully published message")
+
+	return nil
+}
+
+// Subscribe subscribes to a topic with a handler function
+func (s *WatermillSubscriber) Subscribe(topic string, handler func([]byte)) error {
+	// Subscribe to the topic
+	messages, err := s.pubSub.Subscribe(context.Background(), topic)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	// Start a goroutine to handle messages
+	go func() {
+		for msg := range messages {
+			// Call the handler with the message payload
+			handler(msg.Payload)
+			// Ack the message
+			msg.Ack()
+		}
+	}()
 
 	return nil
 }
