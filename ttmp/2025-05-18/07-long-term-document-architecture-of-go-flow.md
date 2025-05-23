@@ -47,7 +47,7 @@ type Node interface {
 When implementing your own node types, you'll typically:
 1. Define a node type (e.g., "question", "llm_call", "data_retrieval")
 2. Specify parameters needed by the node worker (e.g., prompt templates, API settings)
-3. Create an instance using the `NewNode` factory function
+3. Create an instance using the worker's `NewNode()` method
 
 Nodes are declarative definitions - they define "what" should be processed, but not "how". The actual processing logic is implemented in `NodeWorker` implementations.
 
@@ -92,6 +92,8 @@ type NodeWorker interface {
     SupportedMessageTypes() []string
     // Handle a message
     HandleMessage(msg interface{}) error
+    // Create nodes of this type
+    NewNode(params map[string]interface{}) Node
     // Legacy methods
     HandlePrepRequested(event NodePrepRequested)
     HandleExecRequested(event NodeExecRequested)
@@ -129,17 +131,11 @@ type FlowBuilder interface {
     // Then creates a default transition from the previous node
     Then(node Node) FlowBuilder
     // On defines an action-based transition from the previous node
-    On(action string) TransitionBuilder
+    On(action string, nextNode Node) FlowBuilder
     // From switches the source node for subsequent transitions
     From(node Node) FlowBuilder
     // Build finalizes the flow definition
     Build() Flow
-}
-
-// TransitionBuilder defines what happens for a specific action
-type TransitionBuilder interface {
-    // Then sets the destination node for this action
-    Then(node Node) FlowBuilder
 }
 ```
 
@@ -511,18 +507,14 @@ type nodeImpl struct {
 
 This simple structure holds the node's identity, type, name, and parameters. Since nodes are primarily declarative, their implementation is quite straightforward.
 
-The `NewNode` factory function is the recommended way to create node instances:
+Nodes are created through their respective workers using the `NewNode()` method:
 
 ```go
-// NewNode creates a new Node instance
-func NewNode(nodeType string, params map[string]interface{}) Node {
-    return &nodeImpl{
-        id:       uuid.New().String(),
-        nodeType: nodeType,
-        name:     nodeType, // Default name is the type
-        params:   params,
-    }
-}
+// Example of creating a node through a worker
+questionWorker := NewQuestionNodeWorker(publisher, stateStore)
+questionNode := questionWorker.NewNode(map[string]interface{}{
+    "prompt": "What is your question?",
+})
 ```
 
 #### Generic Flow Worker
@@ -1234,12 +1226,17 @@ These methods can be chained together to create a readable, declarative flow def
 The simplest flow is a linear sequence of nodes. This is ideal for straightforward processes where each step follows the previous one in a fixed order:
 
 ```go
-// Define nodes
-questionNode := NewNode("question", map[string]interface{}{
+// Create workers first
+questionWorker := NewQuestionNodeWorker(publisher, stateStore)
+greetingWorker := NewGreetingNodeWorker(publisher, stateStore)
+farewellWorker := NewFarewellNodeWorker(publisher, stateStore)
+
+// Create nodes using workers
+questionNode := questionWorker.NewNode(map[string]interface{}{
     "prompt": "What is your name?",
 })
-greetingNode := NewNode("greeting", map[string]interface{}{})
-farewell := NewNode("farewell", map[string]interface{}{})
+greetingNode := greetingWorker.NewNode(map[string]interface{}{})
+farewell := farewellWorker.NewNode(map[string]interface{}{})
 
 // Define flow using builder pattern
 simpleFlow := NewFlowBuilder().
@@ -1258,29 +1255,35 @@ The `Then()` method creates a default transition, meaning the flow will proceed 
 
 ### 6.3 Branching Flows with Conditional Logic
 
-More complex workflows often require branching based on conditions or user choices. This is achieved using the `On(action)` method to define different paths for different actions:
+More complex workflows often require branching based on conditions or user choices. This is achieved using the `On(action, nextNode)` method to define different paths for different actions:
 
 ```go
-// Define nodes
-reviewNode := NewNode("review", map[string]interface{}{
+// Create workers
+reviewWorker := NewReviewNodeWorker(publisher, stateStore)
+paymentWorker := NewPaymentNodeWorker(publisher, stateStore)
+reviseWorker := NewReviseNodeWorker(publisher, stateStore)
+finishWorker := NewFinishNodeWorker(publisher, stateStore)
+
+// Create nodes using workers
+reviewNode := reviewWorker.NewNode(map[string]interface{}{
     "prompt": "Review this expense report",
 })
-paymentNode := NewNode("payment", map[string]interface{}{
+paymentNode := paymentWorker.NewNode(map[string]interface{}{
     "processor": "finance_api",
 })
-reviseNode := NewNode("revise", map[string]interface{}{
+reviseNode := reviseWorker.NewNode(map[string]interface{}{
     "prompt": "Please revise your expense report",
 })
-finishNode := NewNode("finish", map[string]interface{}{
+finishNode := finishWorker.NewNode(map[string]interface{}{
     "message": "Process completed",
 })
 
 // Build flow with branches
 expenseFlow := NewFlowBuilder().
     Begin(reviewNode).
-    On("approved").Then(paymentNode).
-    On("needs_revision").Then(reviseNode).
-    On("rejected").Then(finishNode).
+    On("approved", paymentNode).
+    On("needs_revision", reviseNode).
+    On("rejected", finishNode).
     From(reviseNode).Then(reviewNode). // Loop back
     From(paymentNode).Then(finishNode).
     Build()
@@ -1298,21 +1301,28 @@ The `From()` method is used to switch the current node for subsequent transition
 The builder pattern makes it easy to implement loops and cycles in workflows, which are common in real-world processes:
 
 ```go
-// Define nodes for a questionnaire flow
-introNode := NewNode("intro", map[string]interface{}{})
-questionNode := NewNode("question", map[string]interface{}{})
-checkAnswerNode := NewNode("check_answer", map[string]interface{}{})
-nextQuestionNode := NewNode("next_question", map[string]interface{}{})
-summaryNode := NewNode("summary", map[string]interface{}{})
+// Create workers
+introWorker := NewIntroNodeWorker(publisher, stateStore)
+questionWorker := NewQuestionNodeWorker(publisher, stateStore)
+checkAnswerWorker := NewCheckAnswerNodeWorker(publisher, stateStore)
+nextQuestionWorker := NewNextQuestionNodeWorker(publisher, stateStore)
+summaryWorker := NewSummaryNodeWorker(publisher, stateStore)
+
+// Create nodes using workers
+introNode := introWorker.NewNode(map[string]interface{}{})
+questionNode := questionWorker.NewNode(map[string]interface{}{})
+checkAnswerNode := checkAnswerWorker.NewNode(map[string]interface{}{})
+nextQuestionNode := nextQuestionWorker.NewNode(map[string]interface{}{})
+summaryNode := summaryWorker.NewNode(map[string]interface{}{})
 
 // Build flow with a question loop
 questionnaireFlow := NewFlowBuilder().
     Begin(introNode).
     Then(questionNode).
     Then(checkAnswerNode).
-    On("invalid").Then(questionNode). // Loop back for invalid answers
-    On("valid").Then(nextQuestionNode).
-    On("complete").Then(summaryNode).
+    On("invalid", questionNode). // Loop back for invalid answers
+    On("valid", nextQuestionNode).
+    On("complete", summaryNode).
     From(nextQuestionNode).Then(questionNode). // Loop to next question
     Build()
 ```
@@ -1420,15 +1430,15 @@ func main() {
     }
     
     // Create and register node workers
-    questionNode := event.NewQuestionNodeWorker(runner.Publisher(), runner.StateStore(), "What is your question?")
-    answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
-    runner.RegisterNodeWorkers(questionNode, answerNode)
+    questionWorker := event.NewQuestionNodeWorker(runner.Publisher(), runner.StateStore(), "What is your question?")
+    answerWorker := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
+    runner.RegisterNodeWorkers(questionWorker, answerWorker)
     
-    // Define nodes for a flow
-    questionNodeDef := impl.NewNode("question", map[string]interface{}{
+    // Create nodes using workers
+    questionNodeDef := questionWorker.NewNode(map[string]interface{}{
         "question": "What would you like to know about?",
     })
-    answerNodeDef := impl.NewNode("answer", map[string]interface{}{})
+    answerNodeDef := answerWorker.NewNode(map[string]interface{}{})
     
     // Define a flow using the builder pattern
     testFlow := impl.NewFlowBuilder("basic").
@@ -1755,8 +1765,8 @@ The builder pattern provides a fluent, readable API for defining flows. This app
 flow := NewFlowBuilder().
     Begin(validateInput).
     Then(processData).
-    On("valid").Then(storeResults).
-    On("invalid").Then(handleErrors).
+    On("valid", storeResults).
+    On("invalid", handleErrors).
     Build()
 ```
 
@@ -1966,8 +1976,8 @@ func (h *QuestionHandler) Post(ctx NodeContext, prepResult, execResult interface
 
 // Option 2: Using NodeBuilder with function callbacks
 
-// Creating the answer node using NodeBuilder
-answerNode := NewNodeBuilder("answer", publisher, stateStore).
+// Creating the answer node worker using NodeBuilder
+answerWorker := NewNodeWorkerBuilder("answer", publisher, stateStore).
     WithName("LLM Answer Generator").
     WithParam("model", "gpt-4").
     WithPrep(func(ctx NodeContext) (interface{}, error) {
@@ -2008,21 +2018,21 @@ answerNode := NewNodeBuilder("answer", publisher, stateStore).
 
 #### 2. Register Your Nodes with the Router
 
-Once you've defined your nodes, register them with the event router:
+Once you've defined your node workers, register them with the event router:
 
 ```go
-// Create the question node using SimpleNodeHandler
+// Create the question node worker using SimpleNodeHandler
 questionHandler := &QuestionHandler{}
-questionNode := NewSimpleNode(
+questionWorker := NewSimpleNodeWorker(
     "question",
     questionHandler,
     publisher,
     stateStore,
 )
 
-// Register both nodes with the router
-watermillRouter.RegisterNodeWorker(questionNode)
-watermillRouter.RegisterNodeWorker(answerNode)
+// Register both node workers with the router
+watermillRouter.RegisterNodeWorker(questionWorker)
+watermillRouter.RegisterNodeWorker(answerWorker)
 ```
 
 #### 3. Define Your Flow
@@ -2030,11 +2040,11 @@ watermillRouter.RegisterNodeWorker(answerNode)
 Next, define the flow that connects these nodes using the builder pattern:
 
 ```go
-// Define node definitions
-questionNodeDef := NewNode("question", map[string]interface{}{
+// Create node definitions using workers
+questionNodeDef := questionWorker.NewNode(map[string]interface{}{
     "prompt": "What would you like to know about?",
 })
-answerNodeDef := NewNode("answer", map[string]interface{}{
+answerNodeDef := answerWorker.NewNode(map[string]interface{}{
     "model": "gpt-4",
 })
 
@@ -2231,8 +2241,8 @@ func (h *WeatherToolHandler) Post(ctx NodeContext, prepResult, execResult interf
 Then create an intent classifier to route the question to the right node:
 
 ```go
-// Create an intent classifier node using NodeBuilder
-intentClassifierNode := NewNodeBuilder("intent_classifier", publisher, stateStore).
+// Create an intent classifier node worker using NodeBuilder
+intentClassifierWorker := NewNodeWorkerBuilder("intent_classifier", publisher, stateStore).
     WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
         // Get user question from shared data
         userQuestion, ok := ctx.SharedData["question"].(string)
@@ -2258,18 +2268,18 @@ intentClassifierNode := NewNodeBuilder("intent_classifier", publisher, stateStor
 Finally, update your flow to include these nodes:
 
 ```go
-// Define node definitions
-questionNodeDef := NewNode("question", map[string]interface{}{})
-intentClassifierNodeDef := NewNode("intent_classifier", map[string]interface{}{})
-weatherToolNodeDef := NewNode("weather_tool", map[string]interface{}{})
-answerNodeDef := NewNode("answer", map[string]interface{}{})
+// Create node definitions using workers
+questionNodeDef := questionWorker.NewNode(map[string]interface{}{})
+intentClassifierNodeDef := intentClassifierWorker.NewNode(map[string]interface{}{})
+weatherToolNodeDef := weatherToolWorker.NewNode(map[string]interface{}{})
+answerNodeDef := answerWorker.NewNode(map[string]interface{}{})
 
 // Build flow with intent-based branching
 agentFlow := NewFlowBuilder().
     Begin(questionNodeDef).
     Then(intentClassifierNodeDef).
-    On("weather_intent").Then(weatherToolNodeDef).Then(answerNodeDef).
-    On("general_intent").Then(answerNodeDef).
+    On("weather_intent", weatherToolNodeDef).Then(answerNodeDef).
+    On("general_intent", answerNodeDef).
     Build()
 ```
 
@@ -2288,4 +2298,136 @@ When developing agents with PocketFlow, keep these best practices in mind:
 9. **Provide Clear Documentation**: Use flow visualization to document your agent
 10. **Iterate Based on Feedback**: Continuously improve based on user interactions
 
-By following these patterns, you can build sophisticated, reliable agents that leverage the full power of PocketFlow's architecture. 
+By following these patterns, you can build sophisticated, reliable agents that leverage the full power of PocketFlow's architecture.
+
+### Function-based with NodeBuilder
+
+For even simpler cases, PocketFlow provides a `NodeBuilder` that lets you create node workers using callback functions:
+
+```go
+// NodeBuilder provides a fluent API for building node workers
+type NodeBuilder interface {
+    // WithName sets the display name for the node
+    WithName(name string) NodeBuilder
+
+    // WithParam adds a parameter to the node
+    WithParam(key string, value interface{}) NodeBuilder
+
+    // WithPrep sets the prep handler function
+    WithPrep(handler func(ctx NodeContext) (interface{}, error)) NodeBuilder
+
+    // WithExec sets the exec handler function
+    WithExec(handler func(ctx NodeContext, prepResult interface{}) (interface{}, error)) NodeBuilder
+
+    // WithPost sets the post handler function
+    WithPost(handler func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error)) NodeBuilder
+
+    // Build creates a NodeWorker instance with the specified configuration
+    Build() NodeWorker
+}
+```
+
+Using this builder, you can create node workers with minimal code:
+
+```go
+// Create a greeting node worker using the builder
+greetingWorker := NewNodeWorkerBuilder("greeting", publisher, stateStore).
+    WithName("Friendly Greeting").
+    WithParam("prefix", "Hello,").
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        // Get name from params or use default
+        name := "User"
+        if val, ok := ctx.Params["name"]; ok {
+            if nameStr, ok := val.(string); ok && nameStr != "" {
+                name = nameStr
+            }
+        }
+        
+        // Get prefix from params
+        prefix := "Hello,"
+        if val, ok := ctx.Params["prefix"]; ok {
+            if prefixStr, ok := val.(string); ok && prefixStr != "" {
+                prefix = prefixStr
+            }
+        }
+        
+        // Generate greeting
+        greeting := fmt.Sprintf("%s %s!", prefix, name)
+        return greeting, nil
+    }).
+    Build()
+
+// Register with the router
+watermillRouter.RegisterNodeWorker(greetingWorker)
+```
+
+### 11.4 Creating a Memory-Aware Answer Node
+
+To add memory-awareness to the answer node, we can use the `NodeBuilder` to create a custom node worker:
+
+```go
+// Create a memory-aware answer node worker
+memoryAnswerWorker := NewNodeWorkerBuilder("answer_with_memory", publisher, stateStore).
+    WithParam("model", "gpt-4").
+    WithPrep(func(ctx NodeContext) (interface{}, error) {
+        // Get the user's question from shared data
+        userQuestion, ok := ctx.SharedData["question"].(string)
+        if !ok {
+            return nil, fmt.Errorf("user question not found in shared data")
+        }
+        
+        // Get conversation history from shared data
+        history, ok := ctx.SharedData["conversation_history"].([]map[string]string)
+        if !ok {
+            history = []map[string]string{}
+        }
+        
+        return map[string]interface{}{
+            "question": userQuestion,
+            "history": history,
+        }, nil
+    }).
+    WithExec(func(ctx NodeContext, prepResult interface{}) (interface{}, error) {
+        data := prepResult.(map[string]interface{})
+        userQuestion := data["question"].(string)
+        history := data["history"].([]map[string]string)
+        
+        // Build a prompt that includes conversation history
+        var prompt strings.Builder
+        prompt.WriteString("Given the following conversation history:\n\n")
+        
+        for _, entry := range history {
+            prompt.WriteString(fmt.Sprintf("User: %s\n", entry["question"]))
+            prompt.WriteString(fmt.Sprintf("Assistant: %s\n\n", entry["answer"]))
+        }
+        
+        prompt.WriteString(fmt.Sprintf("User: %s\n", userQuestion))
+        prompt.WriteString("Assistant: ")
+        
+        // In a real implementation, call the actual LLM API
+        // For this example, we'll use a mock response
+        llmResponse := "PocketFlow helps you build sophisticated agents with memory and context!"
+        
+        return llmResponse, nil
+    }).
+    WithPost(func(ctx NodeContext, prepResult, execResult interface{}) (string, interface{}, error) {
+        data := prepResult.(map[string]interface{})
+        userQuestion := data["question"].(string)
+        history := data["history"].([]map[string]string)
+        llmResponse := execResult.(string)
+        
+        // Update conversation history
+        history = append(history, map[string]string{
+            "question": userQuestion,
+            "answer": llmResponse,
+        })
+        
+        // Store updated history in shared data
+        if err := ctx.StateStore.UpdateSharedData(ctx.FlowExecutionID, "conversation_history", history); err != nil {
+            return "", nil, err
+        }
+        
+        return "default", llmResponse, nil
+    }).
+    Build()
+```

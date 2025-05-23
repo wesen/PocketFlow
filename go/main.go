@@ -14,6 +14,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/branching"
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -22,6 +23,21 @@ func main() {
 	// Parse command-line flags
 	flowType := flag.String("flow", "basic", "Flow type to run (basic, qa, branching)")
 	visualizeOnly := flag.Bool("visualize", false, "Only visualize the flow without running it")
+	enableObservability := flag.Bool("observability", false, "Enable observability with colorized console output")
+	observabilityVerbose := flag.Bool("observability-verbose", false, "Enable verbose observability output (implies -observability)")
+	
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nPocketFlow Go - Event-driven LLM application framework\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  %s -flow basic                    # Run basic QA flow\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -flow qa -observability        # Run QA flow with observability\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -flow branching -observability-verbose  # Run branching flow with verbose tracing\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -visualize -flow basic         # Just show the flow diagram\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nFlags:\n")
+		flag.PrintDefaults()
+	}
+	
 	flag.Parse()
 
 	// Setup zerolog with console logger
@@ -32,6 +48,9 @@ func main() {
 	})
 	log.Logger = zerolog
 
+	// Check if observability should be enabled
+	useObservability := *enableObservability || *observabilityVerbose
+	
 	// Create a runner with default options
 	// Create a closure with the runner reference
 	completionHandler := func(runner *event.Runner, completed core.FlowCompletedMessage) error {
@@ -62,6 +81,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup observability if enabled
+	var observablePublisher *observability.ObservableEventPublisher
+	if useObservability {
+		log.Info().Msg("🔍 Setting up observability...")
+		
+		// Create observability manager
+		obsManager := observability.NewObservabilityManager()
+		
+		// Add stdout observer with appropriate verbosity
+		stdoutObserver := observability.NewStdoutObserverWithOptions("console", true, *observabilityVerbose)
+		err := obsManager.AddObserver(stdoutObserver)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to add stdout observer")
+		} else {
+			log.Info().Bool("verbose", *observabilityVerbose).Msg("✓ Added colorized console observer")
+		}
+		
+		// Add flow tracer for detailed flow tracking
+		flowTracer := observability.NewStdoutFlowTracer("flow_tracer")
+		err = obsManager.AddObserver(flowTracer)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to add flow tracer")
+		} else {
+			log.Info().Msg("✓ Added flow tracer for status tracking")
+		}
+		
+		// Wrap the runner's publisher with observability
+		observablePublisher = observability.NewObservableEventPublisher(runner.Publisher(), obsManager)
+		
+		log.Info().Int("observers", len(obsManager.ListObservers())).Msg("🎯 Observability system ready")
+	}
+
 	// Create and prepare the requested flow
 	var flow core.Flow
 	var flowName string
@@ -69,7 +120,7 @@ func main() {
 	switch *flowType {
 	case "basic":
 		flowName = "Basic QA Flow"
-		flow = setupBasicFlow(runner)
+		flow = setupBasicFlow(runner, observablePublisher)
 
 	case "qa":
 		flowName = "Question-Answering Flow"
@@ -99,6 +150,14 @@ func main() {
 
 	log.Info().Str("flowName", flowName).Msg("🚀 Starting PocketFlow Go example...")
 
+	// Show observability status
+	if useObservability {
+		log.Info().Msg("📊 Observability enabled - watch for real-time flow and node execution events below")
+		if *observabilityVerbose {
+			log.Info().Msg("🔍 Verbose mode enabled - showing detailed parameters and results")
+		}
+	}
+
 	// Run the flow and wait for completion
 	initialData := map[string]interface{}{
 		"started_at": time.Now().Format(time.RFC3339),
@@ -118,7 +177,7 @@ func main() {
 	log.Info().Msg("PocketFlow execution completed")
 }
 
-func setupBasicFlow(runner *event.Runner) core.Flow {
+func setupBasicFlow(runner *event.Runner, observablePublisher *observability.ObservableEventPublisher) core.Flow {
 	// Set up mock LLM client
 	log.Debug().Msg("Creating mock LLM client")
 	mockLLM := event.NewMockLLMClient()
@@ -127,12 +186,20 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 
 	// Create node workers
 	log.Debug().Msg("Creating node workers")
+	
+	// Use observable publisher if available, otherwise use the regular publisher
+	var publisher core.EventPublisher = runner.Publisher()
+	if observablePublisher != nil {
+		publisher = observablePublisher
+		log.Info().Msg("🔍 Using observable publisher for enhanced tracing")
+	}
+	
 	questionNode := event.NewQuestionNodeWorker(
-		runner.Publisher(),
+		publisher,
 		runner.StateStore(),
 		"What is your question?",
 	)
-	answerNode := event.NewAnswerNodeWorker(runner.Publisher(), runner.StateStore(), mockLLM)
+	answerNode := event.NewAnswerNodeWorker(publisher, runner.StateStore(), mockLLM)
 	log.Info().Msg("Node workers created")
 
 	// Register the nodes with the router

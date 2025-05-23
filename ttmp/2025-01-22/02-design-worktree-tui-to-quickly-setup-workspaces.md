@@ -7,7 +7,7 @@ A Terminal User Interface (TUI) application that allows developers to quickly cr
 ## Purpose
 
 - **Problem**: Setting up development workspaces with multiple related repositories is repetitive and error-prone
-- **Solution**: Interactive TUI that automates the process of cloning repos, creating worktrees, and initializing Go workspaces
+- **Solution**: Interactive TUI that automates the process of creating worktrees, and initializing Go workspaces
 - **Target Users**: Go developers working with multiple related repositories (microservices, monorepo components, etc.)
 
 ## Core Features
@@ -15,20 +15,15 @@ A Terminal User Interface (TUI) application that allows developers to quickly cr
 ### 1. Repository Selection Interface
 - **Multi-select list** of available repositories from config
 - **Search/filter** functionality to quickly find repos
-- **Repository metadata display**: description, last updated, main branch
-- **Dependency visualization**: show which repos commonly work together
+- **Repository metadata display**: description, last updated, current branch
 
 ### 2. Workspace Configuration
 - **Workspace name input** with smart defaults (based on selected repos)
 - **Target directory selection** with path validation
-- **Branch selection** per repository (default to main/master)
 - **Conflict detection** for existing directories
 
 ### 3. Execution & Progress
-- **Real-time progress display** for each operation
-- **Detailed logging** with expandable sections
 - **Error handling** with retry options
-- **Success summary** with next steps
 
 ## Configuration File Format
 
@@ -40,14 +35,12 @@ workspaces:
 repositories:
   - name: "pocketflow"
     description: "Minimalist LLM framework"
-    url: "https://github.com/the-pocket/PocketFlow.git"
     local_path: "~/code/others/llms/PocketFlow"  # optional: use existing local repo
     default_branch: "main"
     tags: ["llm", "framework", "core"]
     
   - name: "geppetto"
     description: "Corporate headquarters automation"
-    url: "git@github.com:wesen/corporate-headquarters.git"
     local_path: "~/code/wesen/corporate-headquarters"
     subdirectory: "geppetto"  # for monorepos
     default_branch: "main"
@@ -55,7 +48,6 @@ repositories:
     
   - name: "ai-tools"
     description: "AI development utilities"
-    url: "git@github.com:wesen/ai-tools.git"
     default_branch: "develop"
     tags: ["ai", "utilities"]
 
@@ -67,15 +59,6 @@ presets:
   - name: "Corporate Automation"
     description: "Corporate tools and automation"
     repositories: ["geppetto", "ai-tools"]
-
-settings:
-  git:
-    default_remote: "origin"
-    fetch_on_clone: true
-  
-  go:
-    auto_init_workspace: true
-    workspace_file_name: "go.work"
 ```
 
 ## User Interface Design
@@ -109,13 +92,21 @@ settings:
 ┌─ Creating Workspace: llm-workspace ────────────────────────────────────┐
 │                                                                         │
 │ ✓ Creating workspace directory                                         │
-│ ✓ Cloning pocketflow                                                    │
+│ ✓ Setting up pocketflow worktree...                                    │
 │ ⟳ Setting up ai-tools worktree...                                      │
 │ ○ Initializing go.work                                                  │
 │                                                                         │
 │ Current: git worktree add ../ai-tools ~/code/ai-tools                  │
 │                                                                         │
-│ [View Logs]  [Cancel]                                                  │
+│ Logs:                                                                    │
+│                                                                         │
+│ 2025-05-22 10:00:00 │ Creating workspace directory: ~/code/workspaces/llm-workspace │
+│ 2025-05-22 10:00:01 │ git worktree add ../pocketflow ~/code/pocketflow            │
+│ 2025-05-22 10:00:02 │ Preparing to clone ai-tools repository...                  │
+│ 2025-05-22 10:00:03 │ git worktree add ../ai-tools ~/code/ai-tools                │
+│ 2025-05-22 10:00:04 │ Initializing go.work file with selected modules            │
+│                                                                         │
+│   [Cancel]                                                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -140,11 +131,8 @@ cmd/
 │   └── types.go           # Configuration data structures
 ├── workspace/
 │   ├── manager.go         # Workspace creation logic
-│   ├── git.go             # Git operations (clone, worktree)
+│   ├── git.go             # Git operations (worktree)
 │   └── golang.go          # Go workspace initialization
-└── utils/
-    ├── paths.go           # Path manipulation utilities
-    └── validation.go      # Input validation
 ```
 
 ### Key Dependencies
@@ -172,20 +160,10 @@ cmd/
 ### 3. Workspace Creation
 1. Create workspace base directory
 2. For each repository:
-   - Clone if not local, or use existing local repo
    - Create worktree in workspace directory
    - Handle subdirectory extraction if needed
 3. Initialize `go.work` file with all Go modules
 4. Display success summary with next steps
-
-## Error Handling
-
-### Common Scenarios
-- **Network issues**: Retry with exponential backoff
-- **Permission errors**: Clear error messages with suggested fixes
-- **Existing directories**: Offer to backup/rename or choose different location
-- **Git authentication**: Detect and guide through SSH key setup
-- **Missing Go modules**: Skip go.work initialization with warning
 
 ### Recovery Options
 - **Partial failure**: Continue with successful repos, report failures
@@ -204,23 +182,3 @@ cmd/
 - Local paths exist and are valid Git repositories
 - Branch names exist in repositories
 - No circular dependencies in presets
-
-## Future Enhancements
-
-### Phase 2 Features
-- **Template support**: Custom workspace templates with additional setup scripts
-- **IDE integration**: Auto-open in VS Code/GoLand with proper workspace configuration
-- **Dependency management**: Automatic `go mod replace` directives for local development
-- **Sync capabilities**: Update existing workspaces when repositories change
-
-### Phase 3 Features
-- **Team sharing**: Shared configuration repositories for team-wide workspace definitions
-- **Docker integration**: Option to create containerized development environments
-- **CI/CD integration**: Generate GitHub Actions workflows for workspace validation
-
-## Success Metrics
-
-- **Time savings**: Reduce workspace setup from 10+ minutes to <2 minutes
-- **Error reduction**: Eliminate common setup mistakes (wrong branches, missing repos)
-- **Adoption**: Team members actively use tool for new feature development
-- **Maintenance**: Configuration stays up-to-date with repository changes 

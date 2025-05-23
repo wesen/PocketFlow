@@ -6,6 +6,7 @@ import (
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
 	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/rs/zerolog/log"
 )
 
@@ -35,6 +36,24 @@ type (
 	NodeCompletedMessage = core.NodeCompletedMessage
 	ExecFailedMessage = core.ExecFailedMessage
 	ProgressUpdateMessage = core.ProgressUpdateMessage
+
+	// Observability interfaces
+	Observer                = observability.Observer
+	ObservableEvent         = observability.ObservableEvent
+	FlowTracer             = observability.FlowTracer
+	NodeTracer             = observability.NodeTracer
+	ObservabilityManager   = observability.ObservabilityManager
+	EventPublisherObserver = observability.EventPublisherObserver
+	FlowStatus             = observability.FlowStatus
+
+	// Observable events
+	FlowStartedEvent   = observability.FlowStartedEvent
+	FlowCompletedEvent = observability.FlowCompletedEvent
+	FlowFailedEvent    = observability.FlowFailedEvent
+	NodeStartedEvent   = observability.NodeStartedEvent
+	NodeCompletedEvent = observability.NodeCompletedEvent
+	NodeFailedEvent    = observability.NodeFailedEvent
+	ProgressUpdateEvent = observability.ProgressUpdateEvent
 )
 
 // Constants
@@ -71,6 +90,13 @@ var (
 	// NewGenericFlowWorker = impl.NewGenericFlowWorker
 	NewSimpleNode = impl.NewSimpleNode
 	NewNodeBuilder = impl.NewNodeBuilder
+
+	// Observability factory methods
+	NewObservabilityManager = observability.NewObservabilityManager
+	NewStdoutObserver = observability.NewStdoutObserver
+	NewStdoutObserverWithOptions = observability.NewStdoutObserverWithOptions
+	NewStdoutFlowTracer = observability.NewStdoutFlowTracer
+	NewObservableEventPublisher = observability.NewObservableEventPublisher
 )
 
 // For backward compatibility, provide access to these types
