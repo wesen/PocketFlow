@@ -27,10 +27,8 @@ const (
 
 // Node message types
 const (
-	// Message sent to request node execution
+	// Message sent to request node execution (legacy)
 	MessageTypeExecRequested = "node.exec.requested"
-	// Message sent to request node execution (new format)
-	MessageTypeNodeExecRequested = "node.exec.requested"
 	// Message sent after node completes execution
 	MessageTypeNodeCompleted = "node.completed"
 	// Message sent after node fails execution
@@ -46,6 +44,7 @@ const (
 // BaseMessage is the common structure for all messages
 type BaseMessage struct {
 	MessageType     string    `json:"message_type"`                // Type of message
+	FlowType string     `json:"flow_type"`
 	FlowExecutionID string    `json:"flow_execution_id"`           // ID of the overall flow execution
 	NodeExecutionID string    `json:"node_execution_id,omitempty"` // ID of this specific node execution (if applicable)
 	Timestamp       time.Time `json:"timestamp"`                   // When this message was created
@@ -56,7 +55,6 @@ type BaseMessage struct {
 // Message sent to request flow start
 type FlowStartRequestedMessage struct {
 	BaseMessage
-	FlowType          string                 `json:"flow_type"`
 	FlowDefinitionID  string                 `json:"flow_definition_id"`
 	InitialSharedData map[string]interface{} `json:"initial_shared_data"`
 }
@@ -64,14 +62,12 @@ type FlowStartRequestedMessage struct {
 // Message sent after flow initialization
 type FlowInitializedMessage struct {
 	BaseMessage
-	FlowType         string `json:"flow_type"`
 	FlowDefinitionID string `json:"flow_definition_id"`
 }
 
 // Message sent after flow successfully completes
 type FlowCompletedMessage struct {
 	BaseMessage
-	FlowType    string      `json:"flow_type"`
 	FinalAction string      `json:"final_action"`
 	FinalResult interface{} `json:"final_result,omitempty"`
 	ExecutionMs int64       `json:"execution_ms"`
@@ -80,7 +76,6 @@ type FlowCompletedMessage struct {
 // Message sent after flow fails
 type FlowFailedMessage struct {
 	BaseMessage
-	FlowType     string `json:"flow_type"`
 	NodeID       string `json:"node_id,omitempty"`
 	ErrorMessage string `json:"error_message"`
 	ErrorDetails string `json:"error_details,omitempty"`
@@ -91,14 +86,6 @@ type FlowFailedMessage struct {
 
 // Message sent to request node execution
 type ExecRequestedMessage struct {
-	BaseMessage
-	NodeType string     `json:"node_type"`
-	NodeID   string     `json:"node_id"`
-	Params   NodeParams `json:"params,omitempty"`
-}
-
-// Message sent to request node execution (new format)
-type NodeExecRequestedMessage struct {
 	BaseMessage
 	NodeType string     `json:"node_type"`
 	NodeID   string     `json:"node_id"`

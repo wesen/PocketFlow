@@ -107,17 +107,9 @@ func (b *nodeBuilderImpl) Build() core.NodeWorker {
 		postFn: b.postFn,
 	}
 	
-	// Add params to the node definition
-	nodeDef := NewNode(b.nodeType, b.params)
-	
-	// If a name was specified, set it
-	if b.name != b.nodeType {
-		nodeDef.(*nodeImpl).WithName(b.name)
-	}
-	
 	// Create a SimpleNode with the handler
-	simpleNode := NewSimpleNode(b.nodeType, handler, b.publisher, b.store)
+	simpleNodeWorker := NewSimpleNodeWorker(b.nodeType, handler, b.publisher, b.store)
 	
 	// Return the node worker - it implements the NewNode method through SimpleNode
-	return simpleNode
+	return simpleNodeWorker
 }

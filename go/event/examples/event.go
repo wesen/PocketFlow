@@ -5,111 +5,79 @@ import (
 	"fmt"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/flow"
 	"github.com/The-Pocket/PocketFlow/go/event/node"
-	"github.com/The-Pocket/PocketFlow/go/event/observability"
-	"github.com/The-Pocket/PocketFlow/go/event/store"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/rs/zerolog/log"
 )
 
-// Re-export core interfaces
-type (
-	// Core interfaces
-	Node            = core.Node
-	Flow            = core.Flow
-	NodeWorker      = core.NodeWorker
-	FlowWorker      = core.FlowWorker
-	FlowBuilder     = core.FlowBuilder
-	EventPublisher  = core.EventPublisher
+// // Re-export core interfaces
+// type (
+// 	// Core interfaces
+// 	Node            = core.Node
+// 	Flow            = core.Flow
+// 	NodeWorker      = core.NodeWorker
+// 	FlowWorker      = core.FlowWorker
+// 	FlowBuilder     = core.FlowBuilder
+// 	EventPublisher  = core.EventPublisher
 
-	FlowRegistry      = core.FlowRegistry
-	SimpleNodeHandler = core.SimpleNodeHandler
-	NodeBuilder       = core.NodeBuilder
-	NodeParams        = core.NodeParams
+// 	FlowRegistry      = core.FlowRegistry
+// 	SimpleNodeHandler = core.SimpleNodeHandler
+// 	NodeBuilder       = core.NodeBuilder
+// 	NodeParams        = core.NodeParams
 
-	// Messages
-	BaseMessage               = core.BaseMessage
-	FlowStartRequestedMessage = core.FlowStartRequestedMessage
-	FlowInitializedMessage    = core.FlowInitializedMessage
-	FlowCompletedMessage      = core.FlowCompletedMessage
-	FlowFailedMessage         = core.FlowFailedMessage
-	ExecRequestedMessage      = core.ExecRequestedMessage
-	NodeCompletedMessage      = core.NodeCompletedMessage
-	ExecFailedMessage         = core.ExecFailedMessage
-	ProgressUpdateMessage     = core.ProgressUpdateMessage
+// 	// Messages
+// 	BaseMessage               = core.BaseMessage
+// 	FlowStartRequestedMessage = core.FlowStartRequestedMessage
+// 	FlowInitializedMessage    = core.FlowInitializedMessage
+// 	FlowCompletedMessage      = core.FlowCompletedMessage
+// 	FlowFailedMessage         = core.FlowFailedMessage
+// 	ExecRequestedMessage      = core.ExecRequestedMessage
+// 	NodeCompletedMessage      = core.NodeCompletedMessage
+// 	ExecFailedMessage         = core.ExecFailedMessage
+// 	ProgressUpdateMessage     = core.ProgressUpdateMessage
 
-	// Observability interfaces
-	Observer             = observability.Observer
-	ObservableEvent      = observability.ObservableEvent
-	FlowTracer           = observability.FlowTracer
-	NodeTracer           = observability.NodeTracer
-	ObservabilityManager = observability.ObservabilityManager
-	FlowStatus           = observability.FlowStatus
+// 	// Observability interfaces
+// 	Observer             = observability.Observer
+// 	ObservableEvent      = observability.ObservableEvent
+// 	FlowTracer           = observability.FlowTracer
+// 	NodeTracer           = observability.NodeTracer
+// 	ObservabilityManager = observability.ObservabilityManager
+// 	FlowStatus           = observability.FlowStatus
 
-	// Observable events
-	FlowStartedEvent    = observability.FlowStartedEvent
-	FlowCompletedEvent  = observability.FlowCompletedEvent
-	FlowFailedEvent     = observability.FlowFailedEvent
-	NodeStartedEvent    = observability.NodeStartedEvent
-	NodeCompletedEvent  = observability.NodeCompletedEvent
-	NodeFailedEvent     = observability.NodeFailedEvent
-	ProgressUpdateEvent = observability.ProgressUpdateEvent
-)
+// 	// Observable events
+// 	FlowStartedEvent    = observability.FlowStartedEvent
+// 	FlowCompletedEvent  = observability.FlowCompletedEvent
+// 	FlowFailedEvent     = observability.FlowFailedEvent
+// 	NodeStartedEvent    = observability.NodeStartedEvent
+// 	NodeCompletedEvent  = observability.NodeCompletedEvent
+// 	NodeFailedEvent     = observability.NodeFailedEvent
+// 	ProgressUpdateEvent = observability.ProgressUpdateEvent
+// )
 
-// Constants
-const (
-	// Message types
-	MessageTypeFlowStartRequested  = core.MessageTypeFlowStartRequested
-	MessageTypeFlowInitialized     = core.MessageTypeFlowInitialized
-	MessageTypeFlowPauseRequested  = core.MessageTypeFlowPauseRequested
-	MessageTypeFlowPaused          = core.MessageTypeFlowPaused
-	MessageTypeFlowResumeRequested = core.MessageTypeFlowResumeRequested
-	MessageTypeFlowCancelRequested = core.MessageTypeFlowCancelRequested
-	MessageTypeFlowCompleted       = core.MessageTypeFlowCompleted
-	MessageTypeFlowFailed          = core.MessageTypeFlowFailed
-	MessageTypeExecRequested       = core.MessageTypeExecRequested
-	MessageTypeNodeCompleted       = core.MessageTypeNodeCompleted
-	MessageTypeExecFailed          = core.MessageTypeExecFailed
-	MessageTypeProgressUpdate      = core.MessageTypeProgressUpdate
-)
-
-// Factory functions - export from impl package
-
-// Re-export implementation methods from impl package
-var (
-	// Flow factory methods
-	NewFlowBuilder = flow.NewFlowBuilder
-
-	// State and Registry factory methods
-	NewSQLiteStateStore     = store.NewSQLiteStateStore
-	NewInMemoryFlowRegistry = flow.NewInMemoryFlowRegistry
-
-	// Worker factory methods
-	// These are only accessible through the impl package to avoid redeclaration
-	// NewFlowOrchestrator = impl.NewFlowOrchestrator
-	// NewGenericFlowWorker = impl.NewGenericFlowWorker
-	NewSimpleNode  = node.NewSimpleNode
-	NewNodeBuilder = node.NewNodeBuilder
-
-	// Observability factory methods
-	NewObservabilityManager      = observability.NewObservabilityManager
-	NewStdoutObserver            = observability.NewStdoutObserver
-	NewStdoutObserverWithOptions = observability.NewStdoutObserverWithOptions
-	NewStdoutFlowTracer          = observability.NewStdoutFlowTracer
-)
-
-// For backward compatibility, provide access to these types
-
-// Load legacy nodes for backward compatibility
+// // Constants
+// const (
+// 	// Message types
+// 	MessageTypeFlowStartRequested  = core.MessageTypeFlowStartRequested
+// 	MessageTypeFlowInitialized     = core.MessageTypeFlowInitialized
+// 	MessageTypeFlowPauseRequested  = core.MessageTypeFlowPauseRequested
+// 	MessageTypeFlowPaused          = core.MessageTypeFlowPaused
+// 	MessageTypeFlowResumeRequested = core.MessageTypeFlowResumeRequested
+// 	MessageTypeFlowCancelRequested = core.MessageTypeFlowCancelRequested
+// 	MessageTypeFlowCompleted       = core.MessageTypeFlowCompleted
+// 	MessageTypeFlowFailed          = core.MessageTypeFlowFailed
+// 	MessageTypeExecRequested       = core.MessageTypeExecRequested
+// 	MessageTypeNodeCompleted       = core.MessageTypeNodeCompleted
+// 	MessageTypeExecFailed          = core.MessageTypeExecFailed
+// 	MessageTypeProgressUpdate      = core.MessageTypeProgressUpdate
+// )
 
 // NewQuestionNodeWorker creates a question node worker
-func NewQuestionNodeWorker(publisher EventPublisher, stateStore semantic.StateStore, question string) NodeWorker {
+func NewQuestionNodeWorker(publisher core.EventPublisher, stateStore semantic.StateStore, question string) core.NodeWorker {
 	// Create a simple question handler
 	handler := &questionHandler{
 		defaultQuestion: question,
 	}
-	return NewSimpleNode("question", handler, publisher, stateStore)
+	return node.NewSimpleNodeWorker("question", handler, publisher, stateStore)
 }
 
 // questionHandler implements SimpleNodeHandler for asking questions
@@ -160,12 +128,12 @@ func (h *questionHandler) DeclareOutputs() []semantic.SemanticOutput {
 }
 
 // NewAnswerNodeWorker creates an answer node worker
-func NewAnswerNodeWorker(publisher EventPublisher, stateStore semantic.StateStore, llmClient interface{}) NodeWorker {
+func NewAnswerNodeWorker(publisher core.EventPublisher, stateStore semantic.StateStore, llmClient interface{}) core.NodeWorker {
 	// Create a simple answer handler
 	handler := &answerHandler{
 		llmClient: llmClient,
 	}
-	return NewSimpleNode("answer", handler, publisher, stateStore)
+	return node.NewSimpleNodeWorker("answer", handler, publisher, stateStore)
 }
 
 // answerHandler implements SimpleNodeHandler for generating answers

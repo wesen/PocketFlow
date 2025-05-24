@@ -6,6 +6,8 @@
     - [ ] RunHandlers doesn't need to run in its own subroutine and I don't think it's needed anyway (see preivous point)
     - [ ] Exit and cancellation seem to block
     - [ ] branching flow doesn't seem to have worked
+    - [ ] add context.Context from msg.Context() to simple node at least
+      - [ ] pass context to flow router on creation (?) 
     - [ ] delay node test: 
 
 - [x] Make a redis version of the examples

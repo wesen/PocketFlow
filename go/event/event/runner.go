@@ -21,16 +21,20 @@ type Runner struct {
 	flowRegistry core.FlowRegistry
 	publisher    core.EventPublisher
 	subscriber   message.Subscriber
-	// Separate router for each flow execution
-	flowRouters   map[string]*FlowEventRouter
+	// Separate router for each flow type, each with its own node workers
+	flowRouters map[string]*FlowEventRouter
+
+	// Node workers registered for flows - keyed by nodeType for sharing across flows
 	nodeWorkers   map[string]core.NodeWorker
+	muNodeWorkers sync.RWMutex
+
 	options       RunnerOptions
 	completeChans map[string]chan struct{}
 	muCompChans   sync.Mutex
 	muFlowRouters sync.RWMutex
 	useRedis      bool
 	redisAddr     string
-	
+
 	// Runner state
 	isInitialized bool
 	isRunning     bool
@@ -196,64 +200,26 @@ func (r *Runner) Init() error {
 	return nil
 }
 
-// wrapFlowCompletionHandler wraps the user-provided completion handler
-// to also signal any waiting goroutines
-func (r *Runner) wrapFlowCompletionHandler() func(core.FlowCompletedMessage) error {
-	return func(msg core.FlowCompletedMessage) error {
-		// Call user handler
-		if r.options.OnFlowCompleted != nil {
-			if err := r.options.OnFlowCompleted(r, msg); err != nil {
-				log.Error().Err(err).Msg("Error in flow completion handler")
-			}
-		}
-
-		// Signal completion
-		r.muCompChans.Lock()
-		if ch, ok := r.completeChans[msg.FlowExecutionID]; ok {
-			ch <- struct{}{}
-			delete(r.completeChans, msg.FlowExecutionID)
-		}
-		r.muCompChans.Unlock()
-
-		return nil
-	}
-}
-
-// wrapFlowFailureHandler wraps the user-provided failure handler
-// to also signal any waiting goroutines
-func (r *Runner) wrapFlowFailureHandler() func(core.FlowFailedMessage) error {
-	return func(msg core.FlowFailedMessage) error {
-		// Call user handler
-		if r.options.OnFlowFailed != nil {
-			if err := r.options.OnFlowFailed(r, msg); err != nil {
-				log.Error().Err(err).Msg("Error in flow failure handler")
-			}
-		}
-
-		// Signal completion (with failure)
-		r.muCompChans.Lock()
-		if ch, ok := r.completeChans[msg.FlowExecutionID]; ok {
-			ch <- struct{}{}
-			delete(r.completeChans, msg.FlowExecutionID)
-		}
-		r.muCompChans.Unlock()
-
-		return nil
-	}
-}
-
 // RegisterNodeWorker registers a node worker with the router
-func (r *Runner) RegisterNodeWorker(worker core.NodeWorker) *Runner {
+func (r *Runner) RegisterNodeWorker(worker core.NodeWorker) (*Runner, error) {
+	if _, ok := r.nodeWorkers[worker.NodeType()]; ok {
+		log.Warn().Str("nodeType", worker.NodeType()).Msg("Node worker already registered")
+		return nil, fmt.Errorf("node worker already registered: %s", worker.NodeType())
+	}
 	r.nodeWorkers[worker.NodeType()] = worker
-	return r
+	return r, nil
 }
 
 // RegisterNodeWorkers registers multiple node workers with the router
-func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) *Runner {
+func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) (error) {
 	for _, worker := range workers {
+		if _, ok := r.nodeWorkers[worker.NodeType()]; ok {
+			log.Warn().Str("nodeType", worker.NodeType()).Msg("Node worker already registered")
+			return fmt.Errorf("node worker already registered: %s", worker.NodeType())
+		}
 		r.nodeWorkers[worker.NodeType()] = worker
 	}
-	return r
+	return nil
 }
 
 // RegisterFlow registers a flow with the registry and creates a worker for it
@@ -272,7 +238,11 @@ func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
 	r.muState.RUnlock()
 
 	// Register flow with registry
-	r.flowRegistry.RegisterFlow(flow.ID(), flow)
+	err := r.flowRegistry.RegisterFlow(flow.ID(), flow)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Error registering flow")
+		return r
+	}
 
 	// Create and register a flow worker
 	flowRouter, err := NewFlowEventRouter(flow, r.stateStore, r.publisher, r.subscriber, r.nodeWorkers, nil)
@@ -321,8 +291,8 @@ func (r *Runner) RunFlow(flow core.Flow, initialData map[string]interface{}) str
 				MessageType:     core.MessageTypeFlowStartRequested,
 				FlowExecutionID: flowExecutionID,
 				Timestamp:       time.Now(),
+				FlowType:        flow.Type(),
 			},
-			FlowType:          flow.Type(),
 			FlowDefinitionID:  flow.ID(),
 			InitialSharedData: initialData,
 		},

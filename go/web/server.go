@@ -15,6 +15,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/flow"
 	"github.com/The-Pocket/PocketFlow/go/event/mocks"
+	"github.com/The-Pocket/PocketFlow/go/event/node"
 	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/gorilla/websocket"
@@ -371,8 +372,8 @@ func (s *Server) setupQANodeWorkers() {
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
 	// Create node workers using SimpleNode with semantic adapters
-	questionWorker := examples.NewSimpleNode("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	answerWorker := examples.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
+	questionWorker := node.NewSimpleNodeWorker("question", &qa.QuestionHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	answerWorker := node.NewSimpleNodeWorker("answer", qa.NewAnswerHandler(mockLLM), s.runner.Publisher(), s.runner.StateStore())
 
 	// Register the node workers
 	s.runner.RegisterNodeWorkers(questionWorker, answerWorker)
@@ -381,14 +382,14 @@ func (s *Server) setupQANodeWorkers() {
 // setupBranchingNodeWorkers registers node workers for the branching flow
 func (s *Server) setupBranchingNodeWorkers() {
 	// Create a simple user input worker that simulates user input using semantic adapter
-	userInputWorker := examples.NewSimpleNode("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	userInputWorker := node.NewSimpleNodeWorker("user_input", &UserInputHandler{}, s.runner.Publisher(), s.runner.StateStore())
 
 	// Create node workers for all branching flow node types using legacy semantic adapters
-	intentClassifierWorker := examples.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	weatherWorker := examples.NewSimpleNode("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	timeWorker := examples.NewSimpleNode("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	helpWorker := examples.NewSimpleNode("help", &branching.HelpHandler{}, s.runner.Publisher(), s.runner.StateStore())
-	generalWorker := examples.NewSimpleNode("general", &branching.GeneralHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	intentClassifierWorker := node.NewSimpleNodeWorker("intent_classifier", &branching.IntentClassifierHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	weatherWorker := node.NewSimpleNodeWorker("weather", &branching.WeatherHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	timeWorker := node.NewSimpleNodeWorker("time", &branching.TimeHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	helpWorker := node.NewSimpleNodeWorker("help", &branching.HelpHandler{}, s.runner.Publisher(), s.runner.StateStore())
+	generalWorker := node.NewSimpleNodeWorker("general", &branching.GeneralHandler{}, s.runner.Publisher(), s.runner.StateStore())
 
 	// Register all the node workers
 	s.runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)

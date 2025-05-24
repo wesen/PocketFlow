@@ -16,6 +16,7 @@ import (
 	"github.com/The-Pocket/PocketFlow/go/event/examples/qa"
 	"github.com/The-Pocket/PocketFlow/go/event/flow"
 	"github.com/The-Pocket/PocketFlow/go/event/mocks"
+	"github.com/The-Pocket/PocketFlow/go/event/node"
 	"github.com/The-Pocket/PocketFlow/go/event/observability"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 	"github.com/The-Pocket/PocketFlow/go/web"
@@ -128,7 +129,7 @@ func main() {
 		// Create observability manager with the runner's subscriber
 		if *useRedis {
 			// For Redis, create a separate observability router with its own consumer group
-			obsRouter, err := event.NewObservabilityRouterWithRedis(*redisAddr, nil)
+			obsRouter, err := observability.NewObservabilityRouterWithRedis(*redisAddr, nil)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to create observability router")
 			} else {
@@ -268,7 +269,11 @@ func setupBasicFlow(runner *event.Runner) core.Flow {
 	log.Info().Msg("Node workers created")
 
 	// Register the nodes with the router
-	runner.RegisterNodeWorkers(questionNode, answerNode)
+	err := runner.RegisterNodeWorkers(questionNode, answerNode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to register node workers")
+		os.Exit(1)
+	}
 	log.Info().Str("nodes", "question,answer").Msg("Node workers registered")
 
 	// Define nodes for the flow
@@ -299,27 +304,35 @@ func setupQANodeWorkers(runner *event.Runner) {
 	mockLLM.AddResponse("", "This is a detailed explanation from the LLM based on your input.")
 
 	// Create node workers using SimpleNode directly with handlers
-	questionWorker := examples.NewSimpleNode("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
-	answerWorker := examples.NewSimpleNode("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
+	questionWorker := node.NewSimpleNodeWorker("question", &qa.QuestionHandler{}, runner.Publisher(), runner.StateStore())
+	answerWorker := node.NewSimpleNodeWorker("answer", qa.NewAnswerHandler(mockLLM), runner.Publisher(), runner.StateStore())
 
 	// Register the node workers
-	runner.RegisterNodeWorkers(questionWorker, answerWorker)
+	err := runner.RegisterNodeWorkers(questionWorker, answerWorker)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to register node workers")
+		os.Exit(1)
+	}
 }
 
 // setupBranchingNodeWorkers registers node workers for the branching flow
 func setupBranchingNodeWorkers(runner *event.Runner) {
 	// Create a simple user input worker that simulates user input
-	userInputWorker := examples.NewSimpleNode("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
+	userInputWorker := node.NewSimpleNodeWorker("user_input", &CLIUserInputHandler{}, runner.Publisher(), runner.StateStore())
 
 	// Create node workers for all branching flow node types using handlers directly
-	intentClassifierWorker := examples.NewSimpleNode("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
-	weatherWorker := examples.NewSimpleNode("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
-	timeWorker := examples.NewSimpleNode("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
-	helpWorker := examples.NewSimpleNode("help", &branching.HelpHandler{}, runner.Publisher(), runner.StateStore())
-	generalWorker := examples.NewSimpleNode("general", &branching.GeneralHandler{}, runner.Publisher(), runner.StateStore())
+	intentClassifierWorker := node.NewSimpleNodeWorker("intent_classifier", &branching.IntentClassifierHandler{}, runner.Publisher(), runner.StateStore())
+	weatherWorker := node.NewSimpleNodeWorker("weather", &branching.WeatherHandler{}, runner.Publisher(), runner.StateStore())
+	timeWorker := node.NewSimpleNodeWorker("time", &branching.TimeHandler{}, runner.Publisher(), runner.StateStore())
+	helpWorker := node.NewSimpleNodeWorker("help", &branching.HelpHandler{}, runner.Publisher(), runner.StateStore())
+	generalWorker := node.NewSimpleNodeWorker("general", &branching.GeneralHandler{}, runner.Publisher(), runner.StateStore())
 
 	// Register all the node workers
-	runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
+	err := runner.RegisterNodeWorkers(userInputWorker, intentClassifierWorker, weatherWorker, timeWorker, helpWorker, generalWorker)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to register node workers")
+		os.Exit(1)
+	}
 }
 
 // CLIUserInputHandler implements SemanticNodeHandler for command line user input

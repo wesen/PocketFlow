@@ -96,6 +96,7 @@ func (w *DelayNodeWorker) HandleMessage(msgObj interface{}) error {
 	progressMsg := core.ProgressUpdateMessage{
 		BaseMessage: core.BaseMessage{
 			MessageType:     core.MessageTypeProgressUpdate,
+			FlowType:        msg.FlowType,
 			FlowExecutionID: msg.FlowExecutionID,
 			NodeExecutionID: msg.NodeExecutionID,
 			Timestamp:       time.Now(),
@@ -151,6 +152,7 @@ func (w *DelayNodeWorker) HandleMessage(msgObj interface{}) error {
 	completedMsg := core.NodeCompletedMessage{
 		BaseMessage: core.BaseMessage{
 			MessageType:     core.MessageTypeNodeCompleted,
+			FlowType:        msg.FlowType,
 			FlowExecutionID: msg.FlowExecutionID,
 			NodeExecutionID: msg.NodeExecutionID,
 			Timestamp:       time.Now(),

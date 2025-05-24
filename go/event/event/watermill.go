@@ -494,101 +494,20 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 		log.Fatal().Err(err).Msg("Failed to create Redis subscriber")
 	}
 
-	// Create a combined PubSub that implements both Publisher and Subscriber interfaces
-	pubSub := &RedisPubSub{
-		Publisher:  publisher,
-		Subscriber: subscriber,
-	}
-
 	router, err := message.NewRouter(message.RouterConfig{}, logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create router")
 	}
 
 	// Setup middlewares for Redis router with dead letter queue support
-	SetupRouterMiddlewares(router, pubSub.Publisher, logger)
+	SetupRouterMiddlewares(router, publisher, logger)
 
 	return &WatermillEventRouter{
-		Publisher:   pubSub.Publisher,
-		Subscriber:  pubSub.Subscriber,
-		Router:      router,
-		NodeWorkers: make(map[string]core.NodeWorker),
-		FlowWorkers: make(map[string]core.FlowWorker),
-		Logger:      logger,
-	}
-}
-
-// NewObservabilityRouterWithRedis creates a separate router for observability with its own consumer group
-func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) (*WatermillEventRouter, error) {
-	if logger == nil {
-		logger = watermill.NewStdLogger(false, false)
-	}
-
-	// Create Redis client
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-		DB:   0,
-	})
-
-	// Create Redis subscriber for observability with separate consumer group
-	subscriber, err := redisstream.NewSubscriber(
-		redisstream.SubscriberConfig{
-			Client:        redisClient,
-			Unmarshaller:  redisstream.DefaultMarshallerUnmarshaller{},
-			ConsumerGroup: "pocketflow_observability",
-			Consumer:      "observability_consumer",
-		},
-		logger,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Redis subscriber for observability: %w", err)
-	}
-
-	router, err := message.NewRouter(message.RouterConfig{}, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create router for observability: %w", err)
-	}
-
-	// Setup basic middlewares for observability router (no dead letter queue needed)
-	SetupRouterMiddlewares(router, nil, logger)
-
-	return &WatermillEventRouter{
-		Publisher:   nil, // Observability only	 needs to subscribe
+			Publisher:   publisher,
 		Subscriber:  subscriber,
 		Router:      router,
 		NodeWorkers: make(map[string]core.NodeWorker),
 		FlowWorkers: make(map[string]core.FlowWorker),
 		Logger:      logger,
-	}, nil
-}
-
-// RedisPubSub combines Redis publisher and subscriber to implement the message.PubSub interface
-type RedisPubSub struct {
-	Publisher  message.Publisher
-	Subscriber message.Subscriber
-}
-
-// Publish implements the Publisher interface
-func (r *RedisPubSub) Publish(topic string, messages ...*message.Message) error {
-	return r.Publisher.Publish(topic, messages...)
-}
-
-// Subscribe implements the Subscriber interface
-func (r *RedisPubSub) Subscribe(ctx context.Context, topic string) (<-chan *message.Message, error) {
-	return r.Subscriber.Subscribe(ctx, topic)
-}
-
-// Close implements the PubSub interface
-func (r *RedisPubSub) Close() error {
-	if closer, ok := r.Publisher.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			log.Error().Err(err).Msg("Error closing Redis publisher")
-		}
 	}
-	if closer, ok := r.Subscriber.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			log.Error().Err(err).Msg("Error closing Redis subscriber")
-		}
-	}
-	return nil
 }
