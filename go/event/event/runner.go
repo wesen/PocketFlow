@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ type Runner struct {
 	subscriber   message.Subscriber
 	// Separate router for each flow type, each with its own node workers
 	flowRouters map[string]*FlowEventRouter
+
+	// Global router for system-wide handlers (completion, failure, etc.)
+	globalRouter *WatermillEventRouter
 
 	// Node workers registered for flows - keyed by nodeType for sharing across flows
 	nodeWorkers   map[string]core.NodeWorker
@@ -187,19 +191,24 @@ func (r *Runner) Init() error {
 	var subscriber message.Subscriber
 	if r.useRedis {
 		log.Info().Str("redisAddr", r.redisAddr).Msg("Setting up Redis Streams publisher")
-		redisRouter := NewWatermillEventRouterWithRedis(r.redisAddr, nil)
-		r.publisher = NewWatermillPublisher(redisRouter.Publisher)
-		subscriber = redisRouter.Subscriber
+		r.globalRouter = NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+		r.publisher = NewWatermillPublisher(r.globalRouter.Publisher)
+		subscriber = r.globalRouter.Subscriber
 	} else {
 		log.Info().Msg("Setting up in-memory publisher")
-		router := NewWatermillEventRouter(nil)
-		r.publisher = NewWatermillPublisher(router.Publisher)
-		subscriber = router.Subscriber
+		r.globalRouter = NewWatermillEventRouter(nil)
+		r.publisher = NewWatermillPublisher(r.globalRouter.Publisher)
+		subscriber = r.globalRouter.Subscriber
 	}
 	log.Info().Msg("Event publisher initialized")
 
 	// Store subscriber for creating flow routers
 	r.subscriber = subscriber
+
+	// Set up global flow completion and failure handlers
+	r.globalRouter.SetupFlowCompletionHandler(r.handleFlowCompleted)
+	r.globalRouter.SetupFlowFailureHandler(r.handleFlowFailed)
+	log.Info().Msg("Global flow completion and failure handlers registered")
 	r.isInitialized = true
 
 	log.Info().Msg("PocketFlow runner initialized")
@@ -217,7 +226,7 @@ func (r *Runner) RegisterNodeWorker(worker core.NodeWorker) (*Runner, error) {
 }
 
 // RegisterNodeWorkers registers multiple node workers with the router
-func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) (error) {
+func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) error {
 	for _, worker := range workers {
 		if _, ok := r.nodeWorkers[worker.NodeType()]; ok {
 			log.Warn().Str("nodeType", worker.NodeType()).Msg("Node worker already registered")
@@ -359,6 +368,12 @@ func (r *Runner) Start() error {
 
 	log.Info().Msg("Starting PocketFlow runner")
 
+	// Start the global router for system-wide handlers
+	if err := r.globalRouter.Start(context.Background()); err != nil {
+		log.Error().Err(err).Msg("Global router stopped with error")
+	}
+	log.Info().Msg("Global router started")
+
 	// Start all flow routers
 	if err := r.startAllFlowRouters(); err != nil {
 		return fmt.Errorf("failed to start flow routers: %w", err)
@@ -442,6 +457,14 @@ func (r *Runner) Stop() error {
 		// Continue with shutdown even if some routers failed to stop
 	}
 
+	// Stop the global router
+	if err := r.globalRouter.Stop(); err != nil {
+		log.Error().Err(err).Msg("Error stopping global router")
+		// Continue with shutdown even if global router failed to stop
+	} else {
+		log.Info().Msg("Global router stopped")
+	}
+
 	r.isRunning = false
 	log.Info().Msg("PocketFlow runner stopped")
 	return nil
@@ -498,6 +521,56 @@ func (r *Runner) GetRunningFlowRouters() []string {
 		}
 	}
 	return running
+}
+
+// handleFlowCompleted handles flow completion events and notifies waiting channels
+func (r *Runner) handleFlowCompleted(msg core.FlowCompletedMessage) error {
+	// Call the user-defined handler first
+	if r.options.OnFlowCompleted != nil {
+		if err := r.options.OnFlowCompleted(r, msg); err != nil {
+			log.Error().Err(err).Str("flowExecutionID", msg.FlowExecutionID).Msg("Error in flow completed handler")
+		}
+	}
+
+	// Notify waiting channels
+	r.muCompChans.Lock()
+	if ch, exists := r.completeChans[msg.FlowExecutionID]; exists {
+		select {
+		case ch <- struct{}{}:
+			log.Debug().Str("flowExecutionID", msg.FlowExecutionID).Msg("Notified waiting channel of flow completion")
+		default:
+			log.Warn().Str("flowExecutionID", msg.FlowExecutionID).Msg("Channel already has pending notification")
+		}
+		delete(r.completeChans, msg.FlowExecutionID)
+	}
+	r.muCompChans.Unlock()
+
+	return nil
+}
+
+// handleFlowFailed handles flow failure events and notifies waiting channels
+func (r *Runner) handleFlowFailed(msg core.FlowFailedMessage) error {
+	// Call the user-defined handler first
+	if r.options.OnFlowFailed != nil {
+		if err := r.options.OnFlowFailed(r, msg); err != nil {
+			log.Error().Err(err).Str("flowExecutionID", msg.FlowExecutionID).Msg("Error in flow failed handler")
+		}
+	}
+
+	// Notify waiting channels (flow failed is also a completion)
+	r.muCompChans.Lock()
+	if ch, exists := r.completeChans[msg.FlowExecutionID]; exists {
+		select {
+		case ch <- struct{}{}:
+			log.Debug().Str("flowExecutionID", msg.FlowExecutionID).Msg("Notified waiting channel of flow failure")
+		default:
+			log.Warn().Str("flowExecutionID", msg.FlowExecutionID).Msg("Channel already has pending notification")
+		}
+		delete(r.completeChans, msg.FlowExecutionID)
+	}
+	r.muCompChans.Unlock()
+
+	return nil
 }
 
 // RegisterObserver registers an observability publisher and topic that will be used
