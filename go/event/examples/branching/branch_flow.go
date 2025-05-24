@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
-	"github.com/The-Pocket/PocketFlow/go/event/impl"
+	"github.com/The-Pocket/PocketFlow/go/event/flow"
+	"github.com/The-Pocket/PocketFlow/go/event/node"
 	"github.com/The-Pocket/PocketFlow/go/semantic"
 )
 
@@ -223,17 +224,17 @@ func (h *GeneralHandler) Post(ctx semantic.NodeContext, prepResult, execResult i
 // CreateBranchingFlow creates a flow with branches based on intent
 func CreateBranchingFlow() core.Flow {
 	// Define node definitions
-	inputNode := impl.NewNode("user_input", core.NodeParams{
+	inputNode := node.NewNode("user_input", core.NodeParams{
 		"prompt": "What would you like to know?",
 	})
-	intentClassifierNode := impl.NewNode("intent_classifier", core.NodeParams{})
-	weatherNode := impl.NewNode("weather", core.NodeParams{})
-	timeNode := impl.NewNode("time", core.NodeParams{})
-	helpNode := impl.NewNode("help", core.NodeParams{})
-	generalNode := impl.NewNode("general", core.NodeParams{})
+	intentClassifierNode := node.NewNode("intent_classifier", core.NodeParams{})
+	weatherNode := node.NewNode("weather", core.NodeParams{})
+	timeNode := node.NewNode("time", core.NodeParams{})
+	helpNode := node.NewNode("help", core.NodeParams{})
+	generalNode := node.NewNode("general", core.NodeParams{})
 
 	// Define flow using builder pattern with branching
-	branchingFlow := impl.NewFlowBuilder("branching").
+	branchingFlow := flow.NewFlowBuilder("branching").
 		Begin(inputNode).
 		Then(intentClassifierNode).
 		On("weather_intent", weatherNode).

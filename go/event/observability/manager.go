@@ -65,8 +65,9 @@ func (m *DefaultObservabilityManager) RemoveObserver(name string) error {
 // subscribeObserver subscribes an observer to its topics
 func (m *DefaultObservabilityManager) subscribeObserver(observer Observer) error {
 	for _, topic := range observer.GetSubscribedTopics() {
-		err := m.router.Router.AddNoPublisherHandler(
-			"observer", topic,
+		m.router.Router.AddNoPublisherHandler(
+			fmt.Sprintf("observer-%s-%s", observer.GetName(), topic),
+			topic,
 			m.router.Subscriber,
 			func(msg *message.Message) error {
 				if observer.IsEnabled() {
@@ -76,9 +77,6 @@ func (m *DefaultObservabilityManager) subscribeObserver(observer Observer) error
 				}
 				return nil
 			})
-		if err != nil {
-			return fmt.Errorf("failed to subscribe to topic '%s': %w", topic, err)
-		}
 	}
 	return nil
 }

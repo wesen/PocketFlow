@@ -136,8 +136,8 @@ func main() {
 				obsManager = observability.NewObservabilityManager(obsRouter)
 			}
 		} else {
-			// For in-memory, use the same subscriber as the main runner
-			obsManager = observability.NewObservabilityManager(runner.Subscriber())
+			// no observability for in-memory
+			log.Fatal().Msg("🔍 No observability for in-memory")
 		}
 
 		// Add stdout observer with appropriate verbosity
@@ -195,8 +195,16 @@ func main() {
 	}
 
 	// Start the runner
-	_, cancel := runner.Start()
-	defer cancel()
+	err := runner.Start()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to start runner")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := runner.Stop(); err != nil {
+			log.Error().Err(err).Msg("Failed to stop runner")
+		}
+	}()
 
 	// Start observability system if enabled
 	if useObservability && obsManager != nil {
@@ -396,8 +404,16 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 	}
 
 	// Start the runner
-	_, cancel := runner.Start()
-	defer cancel()
+	err := runner.Start()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to start runner")
+		return err
+	}
+	defer func() {
+		if err := runner.Stop(); err != nil {
+			log.Error().Err(err).Msg("Failed to stop runner")
+		}
+	}()
 
 	// Start observability system
 	if err := obsManager.Start(); err != nil {

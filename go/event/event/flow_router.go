@@ -81,6 +81,23 @@ func NewFlowEventRouter(
 
 // setupHandlers configures all message handlers for this flow execution
 func (fer *FlowEventRouter) setupHandlers() error {
+	// Set up flow start handler for this flow type
+	flowStartTopic := fmt.Sprintf("flow.%s", fer.flowType)
+	flowStartHandlerName := fmt.Sprintf("flow_%s_start", fer.flowType)
+	
+	fer.router.AddNoPublisherHandler(
+		flowStartHandlerName,
+		flowStartTopic,
+		fer.subscriber,
+		fer.createFlowStartHandler(),
+	)
+
+	log.Debug().
+		Str("handlerName", flowStartHandlerName).
+		Str("topic", flowStartTopic).
+		Str("flowType", fer.flowType).
+		Msg("Registered flow start handler")
+
 	// Set up node execution handlers for each node type used in this flow
 	for nodeID, node := range fer.flow.Nodes() {
 		nodeType := node.Type()
@@ -128,6 +145,46 @@ func (fer *FlowEventRouter) setupHandlers() error {
 		Msg("Set up flow event router handlers")
 
 	return nil
+}
+
+// createFlowStartHandler creates a handler for flow start requests
+func (fer *FlowEventRouter) createFlowStartHandler() message.NoPublishHandlerFunc {
+	return func(msg *message.Message) error {
+		var event core.FlowStartRequestedMessage
+		if err := fer.unmarshalMessage(msg, &event); err != nil {
+			return err
+		}
+
+		// Only handle if flow type matches
+		if event.FlowType != fer.flowType {
+			log.Debug().
+				Str("flowType", fer.flowType).
+				Str("requestedFlowType", event.FlowType).
+				Str("flowExecutionID", event.FlowExecutionID).
+				Msg("Flow router ignoring start request for different flow type")
+			return nil
+		}
+
+		log.Debug().
+			Str("flowType", fer.flowType).
+			Str("flowExecutionID", event.FlowExecutionID).
+			Str("flowDefinitionID", event.FlowDefinitionID).
+			Interface("initialSharedData", event.InitialSharedData).
+			Str("messageID", msg.UUID).
+			Msg("Flow router processing flow start request")
+
+		if err := fer.handleFlowStartRequested(event); err != nil {
+			log.Error().
+				Err(err).
+				Str("flowType", fer.flowType).
+				Str("flowExecutionID", event.FlowExecutionID).
+				Str("messageID", msg.UUID).
+				Msg("Error handling flow start request")
+			return err
+		}
+
+		return nil
+	}
 }
 
 // createNodeExecHandler creates a handler for node execution requests
@@ -226,6 +283,77 @@ func (fer *FlowEventRouter) handleNodeCompleted(event core.NodeCompletedMessage)
 
 	// Node failed, fail the flow
 	return fer.failFlow(event.FlowExecutionID, event.NodeID, event.ErrorMessage)
+}
+
+// handleFlowStartRequested processes a flow start request
+func (fer *FlowEventRouter) handleFlowStartRequested(event core.FlowStartRequestedMessage) error {
+	// Store the initial shared data
+	for key, value := range event.InitialSharedData {
+		if err := fer.stateStore.UpdateSharedData(event.FlowExecutionID, key, value); err != nil {
+			log.Error().
+				Err(err).
+				Str("flowType", fer.flowType).
+				Str("flowExecutionID", event.FlowExecutionID).
+				Str("key", key).
+				Msg("Flow router failed to store initial shared data")
+			return fer.handleFlowInitializationError(event, err)
+		}
+	}
+
+	log.Debug().
+		Str("flowType", fer.flowType).
+		Str("flowExecutionID", event.FlowExecutionID).
+		Interface("initialSharedData", event.InitialSharedData).
+		Msg("Flow router stored initial shared data")
+
+	// Publish initial progress update
+	if err := fer.publisher.Publish("flow.progress", core.ProgressUpdateMessage{
+		BaseMessage: core.BaseMessage{
+			MessageType:     core.MessageTypeProgressUpdate,
+			FlowExecutionID: event.FlowExecutionID,
+			Timestamp:       time.Now(),
+		},
+		Status:   "flow_started",
+		Progress: 0.0,
+		Message:  fmt.Sprintf("Starting flow of type %s", fer.flowType),
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to publish initial progress update")
+	}
+
+	// Get the start node
+	startNode := fer.flow.StartNode()
+	if startNode == nil {
+		log.Error().
+			Str("flowType", fer.flowType).
+			Str("flowExecutionID", event.FlowExecutionID).
+			Str("flowDefinitionID", event.FlowDefinitionID).
+			Msg("Flow router found flow has no start node")
+		return fer.handleFlowInitializationError(event, fmt.Errorf("flow has no start node"))
+	}
+
+	log.Debug().
+		Str("flowType", fer.flowType).
+		Str("flowExecutionID", event.FlowExecutionID).
+		Str("startNodeID", startNode.ID()).
+		Str("startNodeType", startNode.Type()).
+		Interface("startNodeParams", startNode.Params()).
+		Msg("Flow router found start node")
+
+	// Start the first node
+	return fer.executeNode(event.FlowExecutionID, startNode)
+}
+
+// handleFlowInitializationError handles errors during flow initialization
+func (fer *FlowEventRouter) handleFlowInitializationError(event core.FlowStartRequestedMessage, err error) error {
+	// Log the error
+	log.Error().
+		Err(err).
+		Str("flowExecutionID", event.FlowExecutionID).
+		Str("flowType", fer.flowType).
+		Msg("Failed to initialize flow")
+
+	// Publish flow failed event
+	return fer.failFlow(event.FlowExecutionID, "", err.Error())
 }
 
 // executeNode publishes a node execution request

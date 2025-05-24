@@ -30,6 +30,11 @@ type Runner struct {
 	muFlowRouters sync.RWMutex
 	useRedis      bool
 	redisAddr     string
+	
+	// Runner state
+	isInitialized bool
+	isRunning     bool
+	muState       sync.RWMutex
 }
 
 // RunnerOptions configures the behavior of a Runner
@@ -122,6 +127,7 @@ func NewRunner(opts ...Option) *Runner {
 		options:       options,
 		completeChans: make(map[string]chan struct{}),
 		flowRouters:   make(map[string]*FlowEventRouter),
+		nodeWorkers:   make(map[string]core.NodeWorker),
 		useRedis:      false,
 	}
 }
@@ -139,6 +145,7 @@ func NewRunnerWithRedis(redisAddr string, opts ...Option) *Runner {
 		options:       options,
 		completeChans: make(map[string]chan struct{}),
 		flowRouters:   make(map[string]*FlowEventRouter),
+		nodeWorkers:   make(map[string]core.NodeWorker),
 		useRedis:      true,
 		redisAddr:     redisAddr,
 	}
@@ -146,6 +153,13 @@ func NewRunnerWithRedis(redisAddr string, opts ...Option) *Runner {
 
 // Init initializes the runner with all necessary components
 func (r *Runner) Init() error {
+	r.muState.Lock()
+	defer r.muState.Unlock()
+
+	if r.isInitialized {
+		return nil
+	}
+
 	// Initialize logger
 	logger.Get() // Ensure logger is initialized
 	log.Info().Msg("Initializing PocketFlow runner")
@@ -176,7 +190,9 @@ func (r *Runner) Init() error {
 
 	// Store subscriber for creating flow routers
 	r.subscriber = subscriber
+	r.isInitialized = true
 
+	log.Info().Msg("PocketFlow runner initialized")
 	return nil
 }
 
@@ -242,6 +258,19 @@ func (r *Runner) RegisterNodeWorkers(workers ...core.NodeWorker) *Runner {
 
 // RegisterFlow registers a flow with the registry and creates a worker for it
 func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
+	r.muFlowRouters.Lock()
+	defer r.muFlowRouters.Unlock()
+
+	// Check if we need to initialize first
+	r.muState.RLock()
+	if !r.isInitialized {
+		r.muState.RUnlock()
+		log.Fatal().Msg("Runner must be initialized before registering flows. Call Init() first.")
+		return r
+	}
+	isRunning := r.isRunning
+	r.muState.RUnlock()
+
 	// Register flow with registry
 	r.flowRegistry.RegisterFlow(flow.ID(), flow)
 
@@ -249,8 +278,22 @@ func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
 	flowRouter, err := NewFlowEventRouter(flow, r.stateStore, r.publisher, r.subscriber, r.nodeWorkers, nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error creating flow router")
+		return r
 	}
 	r.flowRouters[flow.Type()] = flowRouter
+
+	// If runner is already running, start this router immediately
+	if isRunning {
+		if err := flowRouter.Start(); err != nil {
+			log.Error().Err(err).Str("flowType", flow.Type()).Msg("Failed to start flow router")
+		}
+	}
+
+	log.Info().
+		Str("flowType", flow.Type()).
+		Str("flowID", flow.ID()).
+		Bool("startedImmediately", isRunning).
+		Msg("Flow registered")
 
 	return r
 }
@@ -313,10 +356,106 @@ func (r *Runner) WaitForFlow(flowExecutionID string) error {
 	return nil
 }
 
+// Start starts all registered flow routers
+func (r *Runner) Start() error {
+	r.muState.Lock()
+	defer r.muState.Unlock()
+
+	if !r.isInitialized {
+		return fmt.Errorf("runner must be initialized before starting. Call Init() first")
+	}
+
+	if r.isRunning {
+		return nil // Already running
+	}
+
+	log.Info().Msg("Starting PocketFlow runner")
+
+	// Start all flow routers
+	if err := r.startAllFlowRouters(); err != nil {
+		return fmt.Errorf("failed to start flow routers: %w", err)
+	}
+
+	r.isRunning = true
+	log.Info().Msg("PocketFlow runner started successfully")
+	return nil
+}
+
+// startAllFlowRouters starts all registered flow routers
+func (r *Runner) startAllFlowRouters() error {
+	r.muFlowRouters.RLock()
+	defer r.muFlowRouters.RUnlock()
+
+	var startErrors []error
+
+	for flowType, flowRouter := range r.flowRouters {
+		if !flowRouter.IsRunning() {
+			log.Debug().Str("flowType", flowType).Msg("Starting flow router")
+			if err := flowRouter.Start(); err != nil {
+				startErrors = append(startErrors, fmt.Errorf("failed to start router for flow type %s: %w", flowType, err))
+				log.Error().Err(err).Str("flowType", flowType).Msg("Failed to start flow router")
+			} else {
+				log.Info().Str("flowType", flowType).Msg("Flow router started")
+			}
+		}
+	}
+
+	if len(startErrors) > 0 {
+		// Return the first error, but log all of them
+		return startErrors[0]
+	}
+
+	log.Info().Int("routerCount", len(r.flowRouters)).Msg("All flow routers started")
+	return nil
+}
+
+// stopAllFlowRouters stops all flow routers
+func (r *Runner) stopAllFlowRouters() error {
+	r.muFlowRouters.RLock()
+	defer r.muFlowRouters.RUnlock()
+
+	var stopErrors []error
+
+	for flowType, flowRouter := range r.flowRouters {
+		if flowRouter.IsRunning() {
+			log.Debug().Str("flowType", flowType).Msg("Stopping flow router")
+			if err := flowRouter.Stop(); err != nil {
+				stopErrors = append(stopErrors, fmt.Errorf("failed to stop router for flow type %s: %w", flowType, err))
+				log.Error().Err(err).Str("flowType", flowType).Msg("Failed to stop flow router")
+			} else {
+				log.Info().Str("flowType", flowType).Msg("Flow router stopped")
+			}
+		}
+	}
+
+	if len(stopErrors) > 0 {
+		// Return the first error, but log all of them
+		return stopErrors[0]
+	}
+
+	log.Info().Int("routerCount", len(r.flowRouters)).Msg("All flow routers stopped")
+	return nil
+}
+
 // Stop gracefully stops the runner
 func (r *Runner) Stop() error {
-	log.Info().Msg("Stopping runner")
-	// XXX needs to wait on all flow event routers
+	r.muState.Lock()
+	defer r.muState.Unlock()
+
+	if !r.isRunning {
+		return nil // Already stopped
+	}
+
+	log.Info().Msg("Stopping PocketFlow runner")
+
+	// Stop all flow routers
+	if err := r.stopAllFlowRouters(); err != nil {
+		log.Error().Err(err).Msg("Error stopping flow routers")
+		// Continue with shutdown even if some routers failed to stop
+	}
+
+	r.isRunning = false
+	log.Info().Msg("PocketFlow runner stopped")
 	return nil
 }
 
@@ -343,4 +482,32 @@ func (r *Runner) Subscriber() message.Subscriber {
 // FlowRegistry returns the flow registry
 func (r *Runner) FlowRegistry() core.FlowRegistry {
 	return r.flowRegistry
+}
+
+// IsInitialized returns true if the runner has been initialized
+func (r *Runner) IsInitialized() bool {
+	r.muState.RLock()
+	defer r.muState.RUnlock()
+	return r.isInitialized
+}
+
+// IsRunning returns true if the runner is currently running
+func (r *Runner) IsRunning() bool {
+	r.muState.RLock()
+	defer r.muState.RUnlock()
+	return r.isRunning
+}
+
+// GetRunningFlowRouters returns a list of running flow router types
+func (r *Runner) GetRunningFlowRouters() []string {
+	r.muFlowRouters.RLock()
+	defer r.muFlowRouters.RUnlock()
+
+	var running []string
+	for flowType, router := range r.flowRouters {
+		if router.IsRunning() {
+			running = append(running, flowType)
+		}
+	}
+	return running
 }
