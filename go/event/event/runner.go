@@ -39,6 +39,12 @@ type Runner struct {
 	isInitialized bool
 	isRunning     bool
 	muState       sync.RWMutex
+
+	// Observability
+	observabilityPublisher message.Publisher
+	observabilityTopic     string
+	hasObservability       bool
+	muObservability        sync.RWMutex
 }
 
 // RunnerOptions configures the behavior of a Runner
@@ -251,6 +257,18 @@ func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
 		return r
 	}
 	r.flowRouters[flow.Type()] = flowRouter
+
+	// Register observability middleware if configured
+	r.muObservability.RLock()
+	if r.hasObservability {
+		log.Debug().
+			Str("flowType", flow.Type()).
+			Str("observabilityTopic", r.observabilityTopic).
+			Interface("observabilityPublisher", r.observabilityPublisher).
+			Msg("Registering observability middleware on new flow router")
+		flowRouter.RegisterObservabilityMiddleware(r.observabilityPublisher, r.observabilityTopic)
+	}
+	r.muObservability.RUnlock()
 
 	// If runner is already running, start this router immediately
 	if isRunning {
@@ -480,4 +498,47 @@ func (r *Runner) GetRunningFlowRouters() []string {
 		}
 	}
 	return running
+}
+
+// RegisterObserver registers an observability publisher and topic that will be used
+// to register observability middleware on all existing and future flow routers
+func (r *Runner) RegisterObserver(publisher message.Publisher, topic string) error {
+	if publisher == nil {
+		return fmt.Errorf("publisher is nil")
+	}
+	if topic == "" {
+		return fmt.Errorf("topic is empty")
+	}
+
+	r.muObservability.Lock()
+	defer r.muObservability.Unlock()
+
+	log.Info().
+		Interface("observabilityPublisher", publisher).
+		Str("topic", topic).
+		Msg("Registering observability observer with runner")
+
+	// Store observability configuration
+	r.observabilityPublisher = publisher
+	r.observabilityTopic = topic
+	r.hasObservability = true
+
+	// Register observability middleware on all existing flow routers
+	r.muFlowRouters.RLock()
+	for flowType, flowRouter := range r.flowRouters {
+		log.Debug().
+			Str("flowType", flowType).
+			Interface("observabilityPublisher", publisher).
+			Str("topic", topic).
+			Msg("Registering observability middleware on existing flow router")
+		flowRouter.RegisterObservabilityMiddleware(publisher, topic)
+	}
+	r.muFlowRouters.RUnlock()
+
+	log.Info().
+		Int("existingRouters", len(r.flowRouters)).
+		Str("topic", topic).
+		Msg("Successfully registered observability observer")
+
+	return nil
 }

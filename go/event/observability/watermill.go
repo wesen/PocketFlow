@@ -37,6 +37,17 @@ func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAd
 		return nil, fmt.Errorf("failed to create Redis subscriber for observability: %w", err)
 	}
 
+	publisher, err := redisstream.NewPublisher(
+		redisstream.PublisherConfig{
+			Client:     redisClient,
+			Marshaller: redisstream.DefaultMarshallerUnmarshaller{},
+		},
+		logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Redis publisher for observability: %w", err)
+	}
+
 	router, err := message.NewRouter(message.RouterConfig{}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create router for observability: %w", err)
@@ -46,7 +57,7 @@ func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAd
 	event.SetupRouterMiddlewares(router, nil, logger)
 
 	return &event.WatermillEventRouter{
-		Publisher:   nil, // Observability only needs to subscribe
+		Publisher:   publisher,
 		Subscriber:  subscriber,
 		Router:      router,
 		NodeWorkers: make(map[string]core.NodeWorker),

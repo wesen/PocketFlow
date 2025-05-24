@@ -43,7 +43,7 @@ func NewFlowEventRouter(
 	logger watermill.LoggerAdapter,
 ) (*FlowEventRouter, error) {
 	flowLogger := log.With().Str("flowType", flow.Type()).Logger()
-	
+
 	if logger == nil {
 		logger = watermill.NewStdLogger(false, false)
 	}
@@ -99,7 +99,7 @@ func (fer *FlowEventRouter) setupHandlers() error {
 	// Set up flow start handler for this flow type
 	flowStartTopic := fmt.Sprintf("flow.%s", fer.flowType)
 	flowStartHandlerName := fmt.Sprintf("flow_%s_start", fer.flowType)
-	
+
 	fer.router.AddNoPublisherHandler(
 		flowStartHandlerName,
 		flowStartTopic,
@@ -128,7 +128,7 @@ func (fer *FlowEventRouter) setupHandlers() error {
 			continue
 		}
 
-		// Subscribe to flow-scoped node execution requests 
+		// Subscribe to flow-scoped node execution requests
 		topic := fmt.Sprintf("%s.node.%s", fer.flowType, nodeType)
 		handlerName := fmt.Sprintf("flow_%s_node_%s_exec", fer.flowType, nodeType)
 
@@ -143,7 +143,7 @@ func (fer *FlowEventRouter) setupHandlers() error {
 			Str("handlerName", handlerName).
 			Str("topic", topic).
 			Msg("Registered node execution handler for flow")
-		
+
 		nodeHandlerCount++
 	}
 
@@ -173,7 +173,7 @@ func (fer *FlowEventRouter) setupHandlers() error {
 func (fer *FlowEventRouter) createFlowStartHandler() message.NoPublishHandlerFunc {
 	return func(msg *message.Message) error {
 		msgLogger := fer.logger.With().Str("messageID", msg.UUID).Logger()
-		
+
 		var event core.FlowStartRequestedMessage
 		if err := fer.unmarshalMessage(msg, &event); err != nil {
 			msgLogger.Error().Err(err).Msg("Failed to unmarshal flow start message")
@@ -241,7 +241,7 @@ func (fer *FlowEventRouter) createNodeExecHandler(worker core.NodeWorker) messag
 func (fer *FlowEventRouter) createNodeCompletedHandler() message.NoPublishHandlerFunc {
 	return func(msg *message.Message) error {
 		msgLogger := fer.logger.With().Str("messageID", msg.UUID).Logger()
-		
+
 		var event core.NodeCompletedMessage
 		if err := fer.unmarshalMessage(msg, &event); err != nil {
 			msgLogger.Error().Err(err).Msg("Failed to unmarshal node completed message")
@@ -415,7 +415,7 @@ func (fer *FlowEventRouter) executeNode(flowExecutionID string, node core.Node) 
 			NodeExecutionID: nodeExecutionID,
 			MessageType:     core.MessageTypeExecRequested,
 			FlowExecutionID: flowExecutionID,
-			FlowType:        fer.flowType,	
+			FlowType:        fer.flowType,
 			Timestamp:       time.Now(),
 		},
 		NodeID:   node.ID(),
@@ -515,7 +515,7 @@ func (fer *FlowEventRouter) failFlow(flowExecutionID, nodeID, errorMessage strin
 			MessageType:     core.MessageTypeProgressUpdate,
 			FlowExecutionID: flowExecutionID,
 			Timestamp:       time.Now(),
-			FlowType:        fer.flowType,	
+			FlowType:        fer.flowType,
 		},
 		Status:   "failed",
 		Progress: 0,
@@ -581,6 +581,55 @@ func (fer *FlowEventRouter) IsRunning() bool {
 	fer.mu.RLock()
 	defer fer.mu.RUnlock()
 	return fer.isRunning
+}
+
+// RegisterObservabilityMiddleware registers a middleware that copies all incoming messages
+// to a separate observability topic for monitoring and debugging purposes
+func (fer *FlowEventRouter) RegisterObservabilityMiddleware(observabilityPublisher message.Publisher, observabilityTopic string) {
+	observabilityMiddleware := func(h message.HandlerFunc) message.HandlerFunc {
+		return func(msg *message.Message) ([]*message.Message, error) {
+			// Create observability event from the message payload
+			observabilityMsg := msg.Copy()
+			// Copy original message metadata to observability message
+			for key, value := range msg.Metadata {
+				observabilityMsg.Metadata.Set("original_"+key, value)
+			}
+
+			// Add observability-specific metadata
+			observabilityMsg.Metadata.Set("observability_source", "flow_router")
+			observabilityMsg.Metadata.Set("original_message_id", msg.UUID)
+			observabilityMsg.Metadata.Set("flow_type", fer.flowType)
+			observabilityMsg.Metadata.Set("captured_at", time.Now().UTC().Format(time.RFC3339))
+
+			// Publish to observability topic (non-blocking)
+			go func() {
+				if err := observabilityPublisher.Publish(observabilityTopic, observabilityMsg); err != nil {
+					fer.logger.Error().
+						Err(err).
+						Str("messageID", msg.UUID).
+						Str("observabilityTopic", observabilityTopic).
+						Msg("Failed to publish message to observability topic")
+				} else {
+					fer.logger.Debug().
+						Str("messageID", msg.UUID).
+						Str("observabilityMessageID", observabilityMsg.UUID).
+						Str("observabilityTopic", observabilityTopic).
+						Msg("Successfully published message to observability topic")
+				}
+			}()
+
+			// Continue with original handler
+			return h(msg)
+		}
+	}
+
+	// Add the middleware to the router
+	fer.router.AddMiddleware(observabilityMiddleware)
+
+	fer.logger.Info().
+		Str("observabilityTopic", observabilityTopic).
+		Interface("observabilityPublisher", observabilityPublisher).
+		Msg("Registered observability middleware for flow router")
 }
 
 // unmarshalMessage unmarshals a Watermill message payload into a struct

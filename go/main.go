@@ -135,6 +135,15 @@ func main() {
 			} else {
 				// Create observability manager with separate subscriber for Redis
 				obsManager = observability.NewObservabilityManager(obsRouter)
+
+				// Register the observability publisher with the runner
+				// This will automatically register observability middleware on all flow routers
+				observabilityTopic := "observability.events"
+				if err := runner.RegisterObserver(obsRouter.Publisher, observabilityTopic); err != nil {
+					log.Error().Err(err).Msg("Failed to register observability observer with runner")
+				} else {
+					log.Info().Str("topic", observabilityTopic).Msg("✓ Registered observability observer with runner")
+				}
 			}
 		} else {
 			// no observability for in-memory
@@ -409,6 +418,15 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 
 	// Setup observability manager
 	obsManager := observability.NewObservabilityManager(router)
+
+	// Register the observability publisher with the runner
+	// This will automatically register observability middleware on all flow routers
+	observabilityTopic := "observability.events"
+	if err := runner.RegisterObserver(router.Publisher, observabilityTopic); err != nil {
+		log.Error().Err(err).Msg("Failed to register observability observer with runner")
+	} else {
+		log.Info().Str("topic", observabilityTopic).Msg("✓ Registered observability observer with web server runner")
+	}
 
 	// Add stdout observer for server-side logging
 	stdoutObserver := observability.NewStdoutObserverWithOptions("server-console", true, false)

@@ -19,10 +19,27 @@ type DefaultObservabilityManager struct {
 
 // NewObservabilityManager creates a new observability manager
 func NewObservabilityManager(router *event.WatermillEventRouter) *DefaultObservabilityManager {
-	return &DefaultObservabilityManager{
+	m := &DefaultObservabilityManager{
 		observers: make(map[string]Observer),
 		router:    router,
 	}
+	router.Router.AddNoPublisherHandler(
+		"observability-manager",
+		"observability",
+		router.Subscriber,
+		func(msg *message.Message) error {
+			m.mutex.RLock()
+			for _, observer := range m.observers {
+				if observer.IsEnabled() {
+					if err := observer.HandleMessage(msg); err != nil {
+						log.Error().Err(err).Str("observer", observer.GetName()).Msg("Observer failed to handle message")
+					}
+				}
+			}
+			m.mutex.RUnlock()
+			return nil
+		})
+	return m
 }
 
 // AddObserver adds an observer and subscribes it to its topics
@@ -36,13 +53,6 @@ func (m *DefaultObservabilityManager) AddObserver(observer Observer) error {
 	}
 
 	m.observers[name] = observer
-
-	// Subscribe to the observer's topics if the system is started
-	if m.started {
-		if err := m.subscribeObserver(observer); err != nil {
-			return fmt.Errorf("failed to subscribe observer '%s': %w", name, err)
-		}
-	}
 
 	log.Debug().Str("observer", name).Msg("Added observer")
 	return nil
@@ -59,25 +69,6 @@ func (m *DefaultObservabilityManager) RemoveObserver(name string) error {
 
 	delete(m.observers, name)
 	log.Debug().Str("observer", name).Msg("Removed observer")
-	return nil
-}
-
-// subscribeObserver subscribes an observer to its topics
-func (m *DefaultObservabilityManager) subscribeObserver(observer Observer) error {
-	for _, topic := range observer.GetSubscribedTopics() {
-		m.router.Router.AddNoPublisherHandler(
-			fmt.Sprintf("observer-%s-%s", observer.GetName(), topic),
-			topic,
-			m.router.Subscriber,
-			func(msg *message.Message) error {
-				if observer.IsEnabled() {
-					if err := observer.HandleMessage(topic, msg); err != nil {
-						log.Error().Err(err).Str("observer", observer.GetName()).Str("topic", topic).Msg("Observer failed to handle message")
-					}
-				}
-				return nil
-			})
-	}
 	return nil
 }
 
@@ -138,13 +129,6 @@ func (m *DefaultObservabilityManager) Start() error {
 
 	if m.started {
 		return fmt.Errorf("observability manager already started")
-	}
-
-	// Subscribe all observers to their topics
-	for _, observer := range m.observers {
-		if err := m.subscribeObserver(observer); err != nil {
-			return fmt.Errorf("failed to subscribe observer '%s': %w", observer.GetName(), err)
-		}
 	}
 
 	m.started = true

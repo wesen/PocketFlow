@@ -1,4 +1,4 @@
-package observability
+package events
 
 import (
 	"encoding/json"
@@ -245,5 +245,81 @@ func CreateProgressUpdateEvent(msg *core.ProgressUpdateMessage) *ProgressUpdateE
 		Status:   msg.Status,
 		Progress: msg.Progress,
 		Message:  msg.Message,
+	}
+}
+
+// CreateObservableEventFromMessage parses a Watermill message payload and creates
+// the appropriate observable event based on the message type
+func CreateObservableEventFromMessage(payload []byte) (interface{}, error) {
+	// First, parse as BaseMessage to get the message type
+	var baseMsg core.BaseMessage
+	if err := json.Unmarshal(payload, &baseMsg); err != nil {
+		return nil, err
+	}
+
+	// Switch on message type and create appropriate observable event
+	switch baseMsg.MessageType {
+	case core.MessageTypeFlowStartRequested:
+		var msg core.FlowStartRequestedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowStartedEvent(&msg), nil
+
+	case core.MessageTypeFlowCompleted:
+		var msg core.FlowCompletedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowCompletedEvent(&msg), nil
+
+	case core.MessageTypeFlowFailed:
+		var msg core.FlowFailedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateFlowFailedEvent(&msg), nil
+
+	case core.MessageTypeExecRequested:
+		var msg core.ExecRequestedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeStartedEvent(&msg), nil
+
+	case core.MessageTypeNodeCompleted:
+		var msg core.NodeCompletedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeCompletedEvent(&msg), nil
+
+	case core.MessageTypeExecFailed:
+		var msg core.ExecFailedMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateNodeFailedEvent(&msg), nil
+
+	case core.MessageTypeProgressUpdate:
+		var msg core.ProgressUpdateMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return nil, err
+		}
+		return CreateProgressUpdateEvent(&msg), nil
+
+	default:
+		// For unknown message types, create a generic BaseObservableEvent
+		return &BaseObservableEvent{
+			EventType:       "message.unknown",
+			Timestamp:       baseMsg.Timestamp,
+			FlowExecutionID: baseMsg.FlowExecutionID,
+			NodeExecutionID: baseMsg.NodeExecutionID,
+			OriginalMessage: json.RawMessage(payload),
+			Metadata: map[string]interface{}{
+				"unknown_message_type": baseMsg.MessageType,
+				"flow_type":           baseMsg.FlowType,
+			},
+		}, nil
 	}
 }

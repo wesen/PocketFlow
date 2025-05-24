@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/The-Pocket/PocketFlow/go/event/core"
+	"github.com/The-Pocket/PocketFlow/go/event/observability/events"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/rs/zerolog/log"
 )
@@ -42,6 +43,8 @@ func NewStdoutObserverWithOptions(name string, colorized, verbose bool) *StdoutO
 	}
 }
 
+var _ Observer = (*StdoutObserver)(nil)
+
 // GetName returns the observer's identifier
 func (o *StdoutObserver) GetName() string {
 	return o.name
@@ -71,7 +74,7 @@ func (o *StdoutObserver) SetVerbose(verbose bool) {
 func (o *StdoutObserver) GetSubscribedTopics() []string {
 	return []string{
 		"flow.completed",
-		"flow.failed", 
+		"flow.failed",
 		"node.completed",
 		"node.exec.failed",
 		"progress",
@@ -82,15 +85,15 @@ func (o *StdoutObserver) GetSubscribedTopics() []string {
 }
 
 // HandleMessage processes a message from a subscribed topic
-func (o *StdoutObserver) HandleMessage(topic string, msg *message.Message) error {
+func (o *StdoutObserver) HandleMessage(msg *message.Message) error {
 	if !o.enabled {
 		return nil
 	}
 
 	// Parse the message based on topic and message type
-	event, err := o.parseMessage(topic, msg.Payload)
+	event, err := o.parseMessage(msg.Payload)
 	if err != nil {
-		log.Debug().Err(err).Str("topic", topic).Msg("Failed to parse message for observability")
+		log.Debug().Err(err).Msg("Failed to parse message for observability")
 		return nil // Don't fail on parse errors
 	}
 
@@ -104,7 +107,7 @@ func (o *StdoutObserver) HandleMessage(topic string, msg *message.Message) error
 }
 
 // parseMessage converts a raw message to an ObservableEvent
-func (o *StdoutObserver) parseMessage(topic string, message []byte) (ObservableEvent, error) {
+func (o *StdoutObserver) parseMessage(message []byte) (ObservableEvent, error) {
 	// Try to parse as a base message first to get the message type
 	var baseMsg core.BaseMessage
 	if err := json.Unmarshal(message, &baseMsg); err != nil {
@@ -113,54 +116,54 @@ func (o *StdoutObserver) parseMessage(topic string, message []byte) (ObservableE
 
 	// Create the appropriate observable event based on message type
 	switch baseMsg.MessageType {
-	case "flow.start.requested":
+	case core.MessageTypeFlowStartRequested:
 		var msg core.FlowStartRequestedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateFlowStartedEvent(&msg), nil
+		return events.CreateFlowStartedEvent(&msg), nil
 
-	case "flow.completed":
+	case core.MessageTypeFlowCompleted:
 		var msg core.FlowCompletedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateFlowCompletedEvent(&msg), nil
+		return events.CreateFlowCompletedEvent(&msg), nil
 
-	case "flow.failed":
+	case core.MessageTypeFlowFailed:
 		var msg core.FlowFailedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateFlowFailedEvent(&msg), nil
+		return events.CreateFlowFailedEvent(&msg), nil
 
-	case "node.exec.requested":
+	case core.MessageTypeExecRequested:
 		var msg core.ExecRequestedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateNodeStartedEvent(&msg), nil
+		return events.CreateNodeStartedEvent(&msg), nil
 
-	case "node.completed":
+	case core.MessageTypeNodeCompleted:
 		var msg core.NodeCompletedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateNodeCompletedEvent(&msg), nil
+		return events.CreateNodeCompletedEvent(&msg), nil
 
-	case "node.exec.failed":
+	case core.MessageTypeExecFailed:
 		var msg core.ExecFailedMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateNodeFailedEvent(&msg), nil
+		return events.CreateNodeFailedEvent(&msg), nil
 
-	case "progress.update":
+	case core.MessageTypeProgressUpdate:
 		var msg core.ProgressUpdateMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			return nil, err
 		}
-		return CreateProgressUpdateEvent(&msg), nil
+		return events.CreateProgressUpdateEvent(&msg), nil
 
 	default:
 		// Unknown message type, skip silently
@@ -223,19 +226,19 @@ func (o *StdoutObserver) formatEventType(eventType string) string {
 
 	var color string
 	switch eventType {
-	case EventTypeFlowStarted:
+	case events.EventTypeFlowStarted:
 		color = "32" // Green
-	case EventTypeFlowCompleted:
+	case events.EventTypeFlowCompleted:
 		color = "32" // Green
-	case EventTypeFlowFailed:
+	case events.EventTypeFlowFailed:
 		color = "31" // Red
-	case EventTypeNodeStarted:
+	case events.EventTypeNodeStarted:
 		color = "34" // Blue
-	case EventTypeNodeCompleted:
+	case events.EventTypeNodeCompleted:
 		color = "34" // Blue
-	case EventTypeNodeFailed:
+	case events.EventTypeNodeFailed:
 		color = "31" // Red
-	case EventTypeProgressUpdate:
+	case events.EventTypeProgressUpdate:
 		color = "33" // Yellow
 	default:
 		color = "37" // White
@@ -247,19 +250,19 @@ func (o *StdoutObserver) formatEventType(eventType string) string {
 // formatEventDetails formats event-specific details
 func (o *StdoutObserver) formatEventDetails(event ObservableEvent) string {
 	switch e := event.(type) {
-	case *FlowStartedEvent:
+	case *events.FlowStartedEvent:
 		return o.formatFlowStarted(e)
-	case *FlowCompletedEvent:
+	case *events.FlowCompletedEvent:
 		return o.formatFlowCompleted(e)
-	case *FlowFailedEvent:
+	case *events.FlowFailedEvent:
 		return o.formatFlowFailed(e)
-	case *NodeStartedEvent:
+	case *events.NodeStartedEvent:
 		return o.formatNodeStarted(e)
-	case *NodeCompletedEvent:
+	case *events.NodeCompletedEvent:
 		return o.formatNodeCompleted(e)
-	case *NodeFailedEvent:
+	case *events.NodeFailedEvent:
 		return o.formatNodeFailed(e)
-	case *ProgressUpdateEvent:
+	case *events.ProgressUpdateEvent:
 		return o.formatProgressUpdate(e)
 	default:
 		return "Unknown event type"
@@ -267,21 +270,21 @@ func (o *StdoutObserver) formatEventDetails(event ObservableEvent) string {
 }
 
 // formatFlowStarted formats a flow started event
-func (o *StdoutObserver) formatFlowStarted(event *FlowStartedEvent) string {
+func (o *StdoutObserver) formatFlowStarted(event *events.FlowStartedEvent) string {
 	output := fmt.Sprintf("Flow '%s' started", event.FlowType)
 	if event.FlowDefinitionID != "" {
 		output += fmt.Sprintf(" (def: %s)", o.truncateID(event.FlowDefinitionID))
 	}
-	
+
 	if o.verbose && len(event.InitialData) > 0 {
 		output += fmt.Sprintf(" with data: %v", event.InitialData)
 	}
-	
+
 	return output
 }
 
 // formatFlowCompleted formats a flow completed event
-func (o *StdoutObserver) formatFlowCompleted(event *FlowCompletedEvent) string {
+func (o *StdoutObserver) formatFlowCompleted(event *events.FlowCompletedEvent) string {
 	output := fmt.Sprintf("Flow '%s' completed", event.FlowType)
 	if event.Duration > 0 {
 		output += fmt.Sprintf(" in %v", event.Duration.Round(time.Millisecond))
@@ -292,16 +295,16 @@ func (o *StdoutObserver) formatFlowCompleted(event *FlowCompletedEvent) string {
 	if event.FinalAction != "" {
 		output += fmt.Sprintf(" with action '%s'", event.FinalAction)
 	}
-	
+
 	if o.verbose && event.FinalResult != nil {
 		output += fmt.Sprintf(" result: %v", event.FinalResult)
 	}
-	
+
 	return output
 }
 
 // formatFlowFailed formats a flow failed event
-func (o *StdoutObserver) formatFlowFailed(event *FlowFailedEvent) string {
+func (o *StdoutObserver) formatFlowFailed(event *events.FlowFailedEvent) string {
 	output := fmt.Sprintf("Flow '%s' failed: %s", event.FlowType, event.ErrorMessage)
 	if event.FailedNodeID != "" {
 		output += fmt.Sprintf(" (node: %s)", o.truncateID(event.FailedNodeID))
@@ -309,27 +312,27 @@ func (o *StdoutObserver) formatFlowFailed(event *FlowFailedEvent) string {
 	if event.Duration > 0 {
 		output += fmt.Sprintf(" after %v", event.Duration.Round(time.Millisecond))
 	}
-	
+
 	if o.verbose && event.ErrorDetails != "" {
 		output += fmt.Sprintf(" details: %s", event.ErrorDetails)
 	}
-	
+
 	return output
 }
 
 // formatNodeStarted formats a node started event
-func (o *StdoutObserver) formatNodeStarted(event *NodeStartedEvent) string {
+func (o *StdoutObserver) formatNodeStarted(event *events.NodeStartedEvent) string {
 	output := fmt.Sprintf("Node '%s' (%s) started", event.NodeID, event.NodeType)
-	
+
 	if o.verbose && len(event.Params) > 0 {
 		output += fmt.Sprintf(" with params: %v", event.Params)
 	}
-	
+
 	return output
 }
 
 // formatNodeCompleted formats a node completed event
-func (o *StdoutObserver) formatNodeCompleted(event *NodeCompletedEvent) string {
+func (o *StdoutObserver) formatNodeCompleted(event *events.NodeCompletedEvent) string {
 	output := fmt.Sprintf("Node '%s' (%s) completed", event.NodeID, event.NodeType)
 	if event.Duration > 0 {
 		output += fmt.Sprintf(" in %v", event.Duration.Round(time.Millisecond))
@@ -337,16 +340,16 @@ func (o *StdoutObserver) formatNodeCompleted(event *NodeCompletedEvent) string {
 	if event.Action != "" {
 		output += fmt.Sprintf(" with action '%s'", event.Action)
 	}
-	
+
 	if o.verbose && event.Result != nil {
 		output += fmt.Sprintf(" result: %v", event.Result)
 	}
-	
+
 	return output
 }
 
 // formatNodeFailed formats a node failed event
-func (o *StdoutObserver) formatNodeFailed(event *NodeFailedEvent) string {
+func (o *StdoutObserver) formatNodeFailed(event *events.NodeFailedEvent) string {
 	output := fmt.Sprintf("Node '%s' (%s) failed: %s", event.NodeID, event.NodeType, event.ErrorMessage)
 	if event.RetryCount > 0 {
 		output += fmt.Sprintf(" (retry %d)", event.RetryCount)
@@ -357,16 +360,16 @@ func (o *StdoutObserver) formatNodeFailed(event *NodeFailedEvent) string {
 	if event.Duration > 0 {
 		output += fmt.Sprintf(" after %v", event.Duration.Round(time.Millisecond))
 	}
-	
+
 	if o.verbose && event.ErrorDetails != "" {
 		output += fmt.Sprintf(" details: %s", event.ErrorDetails)
 	}
-	
+
 	return output
 }
 
 // formatProgressUpdate formats a progress update event
-func (o *StdoutObserver) formatProgressUpdate(event *ProgressUpdateEvent) string {
+func (o *StdoutObserver) formatProgressUpdate(event *events.ProgressUpdateEvent) string {
 	output := fmt.Sprintf("Progress: %s (%.1f%%)", event.Status, event.Progress*100)
 	if event.Message != "" {
 		output += fmt.Sprintf(" - %s", event.Message)
@@ -408,7 +411,7 @@ func NewStdoutFlowTracer(name string) *StdoutFlowTracer {
 }
 
 // OnFlowStarted handles flow start events
-func (t *StdoutFlowTracer) OnFlowStarted(event FlowStartedEvent) error {
+func (t *StdoutFlowTracer) OnFlowStarted(event events.FlowStartedEvent) error {
 	// Track flow status
 	t.flowStatuses[event.FlowExecutionID] = &FlowStatus{
 		FlowExecutionID:  event.FlowExecutionID,
@@ -418,7 +421,7 @@ func (t *StdoutFlowTracer) OnFlowStarted(event FlowStartedEvent) error {
 		StartTime:        event.Timestamp,
 		NodesExecuted:    0,
 	}
-	
+
 	// Log to stdout via the base observer
 	if t.StdoutObserver.enabled {
 		output := t.StdoutObserver.formatEvent(&event)
@@ -428,12 +431,12 @@ func (t *StdoutFlowTracer) OnFlowStarted(event FlowStartedEvent) error {
 		}
 		return err
 	}
-	
+
 	return nil
 }
 
 // OnFlowCompleted handles flow completion events
-func (t *StdoutFlowTracer) OnFlowCompleted(event FlowCompletedEvent) error {
+func (t *StdoutFlowTracer) OnFlowCompleted(event events.FlowCompletedEvent) error {
 	// Update flow status
 	if status, exists := t.flowStatuses[event.FlowExecutionID]; exists {
 		status.Status = "completed"
@@ -444,7 +447,7 @@ func (t *StdoutFlowTracer) OnFlowCompleted(event FlowCompletedEvent) error {
 		status.FinalAction = event.FinalAction
 		status.FinalResult = event.FinalResult
 	}
-	
+
 	// Log to stdout via the base observer
 	if t.StdoutObserver.enabled {
 		output := t.StdoutObserver.formatEvent(&event)
@@ -454,12 +457,12 @@ func (t *StdoutFlowTracer) OnFlowCompleted(event FlowCompletedEvent) error {
 		}
 		return err
 	}
-	
+
 	return nil
 }
 
 // OnFlowFailed handles flow failure events
-func (t *StdoutFlowTracer) OnFlowFailed(event FlowFailedEvent) error {
+func (t *StdoutFlowTracer) OnFlowFailed(event events.FlowFailedEvent) error {
 	// Update flow status
 	if status, exists := t.flowStatuses[event.FlowExecutionID]; exists {
 		status.Status = "failed"
@@ -468,7 +471,7 @@ func (t *StdoutFlowTracer) OnFlowFailed(event FlowFailedEvent) error {
 		status.Duration = event.Duration
 		status.ErrorMessage = event.ErrorMessage
 	}
-	
+
 	// Log to stdout via the base observer
 	if t.StdoutObserver.enabled {
 		output := t.StdoutObserver.formatEvent(&event)
@@ -478,7 +481,7 @@ func (t *StdoutFlowTracer) OnFlowFailed(event FlowFailedEvent) error {
 		}
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -488,7 +491,7 @@ func (t *StdoutFlowTracer) GetFlowStatus(flowExecutionID string) (*FlowStatus, e
 	if !exists {
 		return nil, fmt.Errorf("flow status not found for execution ID: %s", flowExecutionID)
 	}
-	
+
 	// Create a copy to avoid concurrent modifications
 	statusCopy := *status
 	return &statusCopy, nil

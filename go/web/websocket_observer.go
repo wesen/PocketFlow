@@ -56,7 +56,7 @@ func (w *WebSocketObserver) GetSubscribedTopics() []string {
 }
 
 // HandleMessage processes a message from a subscribed topic
-func (w *WebSocketObserver) HandleMessage(topic string, msg *message.Message) error {
+func (w *WebSocketObserver) HandleMessage(msg *message.Message) error {
 	if !w.enabled {
 		return nil
 	}
@@ -69,7 +69,7 @@ func (w *WebSocketObserver) HandleMessage(topic string, msg *message.Message) er
 	}
 
 	// Create event for WebSocket broadcast
-	event := createWebSocketEvent(topic, baseMsg)
+	event := createWebSocketEvent(baseMsg)
 	
 	// Broadcast to all connected clients
 	if err := w.server.BroadcastEvent(event); err != nil {
@@ -78,7 +78,6 @@ func (w *WebSocketObserver) HandleMessage(topic string, msg *message.Message) er
 	}
 
 	log.Debug().
-		Str("topic", topic).
 		Str("event_type", event.EventType).
 		Msg("Broadcasted event via WebSocket")
 
@@ -104,7 +103,7 @@ type WebSocketEvent struct {
 }
 
 // createWebSocketEvent creates a WebSocketEvent from a raw message
-func createWebSocketEvent(topic string, rawMsg map[string]interface{}) WebSocketEvent {
+func createWebSocketEvent(rawMsg map[string]interface{}) WebSocketEvent {
 	event := WebSocketEvent{
 		EventType: getStringValue(rawMsg, "message_type"),
 		Timestamp: time.Now(),

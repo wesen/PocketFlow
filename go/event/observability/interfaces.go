@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/The-Pocket/PocketFlow/go/event/observability/events"
 )
 
 // Observer interface for monitoring system events via subscription
@@ -22,7 +23,7 @@ type Observer interface {
 	GetSubscribedTopics() []string
 
 	// HandleMessage processes a message from a subscribed topic
-	HandleMessage(topic string, msg *message.Message) error
+	HandleMessage(msg *message.Message) error
 }
 
 // ObservableEvent represents any event that can be observed
@@ -51,13 +52,13 @@ type FlowTracer interface {
 	Observer
 
 	// OnFlowStarted handles flow start events
-	OnFlowStarted(event FlowStartedEvent) error
+	OnFlowStarted(event events.FlowStartedEvent) error
 
 	// OnFlowCompleted handles flow completion events
-	OnFlowCompleted(event FlowCompletedEvent) error
+	OnFlowCompleted(event events.FlowCompletedEvent) error
 
 	// OnFlowFailed handles flow failure events
-	OnFlowFailed(event FlowFailedEvent) error
+	OnFlowFailed(event events.FlowFailedEvent) error
 
 	// GetFlowStatus returns the current status of a flow
 	GetFlowStatus(flowExecutionID string) (*FlowStatus, error)
@@ -68,13 +69,13 @@ type NodeTracer interface {
 	Observer
 
 	// OnNodeStarted handles node execution start events
-	OnNodeStarted(event NodeStartedEvent) error
+	OnNodeStarted(event events.NodeStartedEvent) error
 
 	// OnNodeCompleted handles node completion events
-	OnNodeCompleted(event NodeCompletedEvent) error
+	OnNodeCompleted(event events.NodeCompletedEvent) error
 
 	// OnNodeFailed handles node failure events
-	OnNodeFailed(event NodeFailedEvent) error
+	OnNodeFailed(event events.NodeFailedEvent) error
 }
 
 // ObservabilityManager coordinates multiple observers via subscriptions
