@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -15,17 +16,22 @@ type DefaultObservabilityManager struct {
 	router    *event.WatermillEventRouter
 	mutex     sync.RWMutex
 	started   bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // NewObservabilityManager creates a new observability manager
 func NewObservabilityManager(router *event.WatermillEventRouter) *DefaultObservabilityManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	m := &DefaultObservabilityManager{
 		observers: make(map[string]Observer),
 		router:    router,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	router.Router.AddNoPublisherHandler(
 		"observability-manager",
-		"observability",
+		"observability.events",
 		router.Subscriber,
 		func(msg *message.Message) error {
 			m.mutex.RLock()
@@ -131,8 +137,16 @@ func (m *DefaultObservabilityManager) Start() error {
 		return fmt.Errorf("observability manager already started")
 	}
 
+	log.Info().Msg("Starting observability system")
+
+	// Start the underlying router
+	if err := m.router.Start(m.ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to start observability router")
+		return fmt.Errorf("failed to start observability router: %w", err)
+	}
+
 	m.started = true
-	log.Info().Msg("Observability system started")
+	log.Info().Msg("Observability system started successfully")
 	return nil
 }
 
@@ -145,13 +159,27 @@ func (m *DefaultObservabilityManager) Stop() error {
 		return nil
 	}
 
-	// Note: We don't unsubscribe here because the EventSubscriber interface
-	// doesn't provide an unsubscribe method. This is typically handled
-	// by the underlying message system when it shuts down.
+	log.Info().Msg("Stopping observability system")
+
+	// Cancel the context to signal shutdown
+	m.cancel()
+
+	// Stop the underlying router
+	if err := m.router.Stop(); err != nil {
+		log.Error().Err(err).Msg("Error stopping observability router")
+		// Continue with shutdown even if router stop fails
+	}
 
 	m.started = false
-	log.Info().Msg("Observability system stopped")
+	log.Info().Msg("Observability system stopped successfully")
 	return nil
+}
+
+// IsRunning returns true if the observability system is running
+func (m *DefaultObservabilityManager) IsRunning() bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.started
 }
 
 // Ensure DefaultObservabilityManager implements ObservabilityManager interface

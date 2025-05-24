@@ -30,7 +30,6 @@ type Runner struct {
 
 	// Node workers registered for flows - keyed by nodeType for sharing across flows
 	nodeWorkers   map[string]core.NodeWorker
-	muNodeWorkers sync.RWMutex
 
 	options       RunnerOptions
 	completeChans map[string]chan struct{}
@@ -191,7 +190,11 @@ func (r *Runner) Init() error {
 	var subscriber message.Subscriber
 	if r.useRedis {
 		log.Info().Str("redisAddr", r.redisAddr).Msg("Setting up Redis Streams publisher")
-		r.globalRouter = NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+		var err error
+		r.globalRouter, err = NewWatermillEventRouterWithRedis(r.redisAddr, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create Redis event router: %w", err)
+		}
 		r.publisher = NewWatermillPublisher(r.globalRouter.Publisher)
 		subscriber = r.globalRouter.Subscriber
 	} else {
@@ -213,16 +216,6 @@ func (r *Runner) Init() error {
 
 	log.Info().Msg("PocketFlow runner initialized")
 	return nil
-}
-
-// RegisterNodeWorker registers a node worker with the router
-func (r *Runner) RegisterNodeWorker(worker core.NodeWorker) (*Runner, error) {
-	if _, ok := r.nodeWorkers[worker.NodeType()]; ok {
-		log.Warn().Str("nodeType", worker.NodeType()).Msg("Node worker already registered")
-		return nil, fmt.Errorf("node worker already registered: %s", worker.NodeType())
-	}
-	r.nodeWorkers[worker.NodeType()] = worker
-	return r, nil
 }
 
 // RegisterNodeWorkers registers multiple node workers with the router
@@ -296,7 +289,7 @@ func (r *Runner) RegisterFlow(flow core.Flow) *Runner {
 }
 
 // RunFlow executes a flow and returns its execution ID
-func (r *Runner) RunFlow(flow core.Flow, initialData map[string]interface{}) string {
+func (r *Runner) RunFlow(flow core.Flow, initialData map[string]interface{}) (string, error) {
 	// Ensure we have some initial data
 	if initialData == nil {
 		initialData = map[string]interface{}{}
@@ -311,7 +304,7 @@ func (r *Runner) RunFlow(flow core.Flow, initialData map[string]interface{}) str
 	flowExecutionID := uuid.New().String()
 
 	// Publish flow start request
-	r.publisher.Publish(
+	err := r.publisher.Publish(
 		fmt.Sprintf("flow.%s", flow.Type()),
 		core.FlowStartRequestedMessage{
 			BaseMessage: core.BaseMessage{
@@ -324,15 +317,22 @@ func (r *Runner) RunFlow(flow core.Flow, initialData map[string]interface{}) str
 			InitialSharedData: initialData,
 		},
 	)
+	if err != nil {
+		log.Error().Err(err).Str("flowExecutionID", flowExecutionID).Msg("Failed to publish flow start request")
+		return "", fmt.Errorf("failed to publish flow start request: %w", err)
+	}
 
 	log.Info().Str("flowExecutionID", flowExecutionID).Msg("Flow execution started")
-	return flowExecutionID
+	return flowExecutionID, nil
 }
 
 // RunFlowAndWait executes a flow and waits for it to complete
 func (r *Runner) RunFlowAndWait(flow core.Flow, initialData map[string]interface{}) (string, error) {
-	flowExecutionID := r.RunFlow(flow, initialData)
-	err := r.WaitForFlow(flowExecutionID)
+	flowExecutionID, err := r.RunFlow(flow, initialData)
+	if err != nil {
+		return "", err
+	}
+	err = r.WaitForFlow(flowExecutionID)
 	return flowExecutionID, err
 }
 

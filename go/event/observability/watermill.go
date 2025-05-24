@@ -8,6 +8,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill-redisstream/pkg/redisstream"
 	"github.com/ThreeDotsLabs/watermill/message"
+	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -53,8 +54,8 @@ func NewObservabilityRouterWithRedis(redisAddr string, logger watermill.LoggerAd
 		return nil, fmt.Errorf("failed to create router for observability: %w", err)
 	}
 
-	// Setup basic middlewares for observability router (no dead letter queue needed)
-	event.SetupRouterMiddlewares(router, nil, logger)
+	// Add middleware to immediately acknowledge messages
+	router.AddMiddleware(middleware.InstantAck)
 
 	return &event.WatermillEventRouter{
 		Publisher:   publisher,

@@ -106,7 +106,7 @@ func NewAnswerHandler(llm LLMInterface) *AnswerHandler {
 // Prep handles the preparation phase
 func (h *AnswerHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get the user's question using semantic data accessor
-	userQuestion, err := ctx.SemanticData.UserInput()
+	userQuestion, err := ctx.SemanticData.GetString("result:node:question")
 	if err != nil {
 		return nil, fmt.Errorf("user question not found: %w", err)
 	}

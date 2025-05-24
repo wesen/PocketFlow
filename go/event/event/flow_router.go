@@ -78,6 +78,7 @@ func NewFlowEventRouter(
 	// Copy node workers for this flow
 	for nodeType, worker := range nodeWorkers {
 		fer.nodeWorkers[nodeType] = worker
+		// XXX allow workers to register their own handlers
 	}
 
 	flowLogger.Debug().Int("nodeWorkerCount", len(fer.nodeWorkers)).Msg("Copied node workers for flow")
@@ -130,13 +131,13 @@ func (fer *FlowEventRouter) setupHandlers() error {
 
 		// Subscribe to flow-scoped node execution requests
 		topic := fmt.Sprintf("%s.node.%s", fer.flowType, nodeType)
-		handlerName := fmt.Sprintf("flow_%s_node_%s_exec", fer.flowType, nodeType)
+		handlerName := fmt.Sprintf("flow_%s_node_%s", fer.flowType, nodeType)
 
 		fer.router.AddNoPublisherHandler(
 			handlerName,
 			topic,
 			fer.subscriber,
-			fer.createNodeExecHandler(worker),
+			fer.createNodeHandler(worker),
 		)
 
 		nodeLogger.Debug().
@@ -204,8 +205,8 @@ func (fer *FlowEventRouter) createFlowStartHandler() message.NoPublishHandlerFun
 	}
 }
 
-// createNodeExecHandler creates a handler for node execution requests
-func (fer *FlowEventRouter) createNodeExecHandler(worker core.NodeWorker) message.NoPublishHandlerFunc {
+// createNodeHandler creates a handler for dispatching messages to the node
+func (fer *FlowEventRouter) createNodeHandler(worker core.NodeWorker) message.NoPublishHandlerFunc {
 	return func(msg *message.Message) error {
 		msgLogger := fer.logger.With().
 			Str("messageID", msg.UUID).
@@ -213,7 +214,7 @@ func (fer *FlowEventRouter) createNodeExecHandler(worker core.NodeWorker) messag
 			Logger()
 
 		// Process all messages for this flow type
-		var event core.ExecRequestedMessage
+		var event core.BaseMessage
 		if err := fer.unmarshalMessage(msg, &event); err != nil {
 			msgLogger.Error().Err(err).Msg("Failed to unmarshal node exec message")
 			return err
@@ -222,7 +223,6 @@ func (fer *FlowEventRouter) createNodeExecHandler(worker core.NodeWorker) messag
 		execLogger := msgLogger.With().
 			Str("flowExecutionID", event.FlowExecutionID).
 			Str("nodeExecutionID", event.NodeExecutionID).
-			Str("nodeID", event.NodeID).
 			Logger()
 
 		execLogger.Debug().Msg("Processing node execution request for flow")
@@ -282,7 +282,8 @@ func (fer *FlowEventRouter) handleNodeCompleted(event core.NodeCompletedMessage)
 		execLogger.Debug().Str("action", event.Action).Msg("Processing successful node completion")
 
 		// Update shared state with node result
-		if err := fer.stateStore.UpdateSharedData(event.FlowExecutionID, event.NodeID, event.Result); err != nil {
+		key := fmt.Sprintf("result:node:%s", event.NodeType)
+		if err := fer.stateStore.UpdateSharedData(event.FlowExecutionID, key, event.Result); err != nil {
 			execLogger.Error().Err(err).Msg("Failed to update shared data")
 			return fmt.Errorf("failed to update shared data: %w", err)
 		}
@@ -294,6 +295,7 @@ func (fer *FlowEventRouter) handleNodeCompleted(event core.NodeCompletedMessage)
 			BaseMessage: core.BaseMessage{
 				MessageType:     core.MessageTypeProgressUpdate,
 				FlowExecutionID: event.FlowExecutionID,
+				NodeExecutionID: event.NodeExecutionID,
 				Timestamp:       time.Now(),
 				FlowType:        fer.flowType,
 			},
@@ -307,6 +309,12 @@ func (fer *FlowEventRouter) handleNodeCompleted(event core.NodeCompletedMessage)
 		// Find next node based on the action
 		nextNode, hasNext := fer.flow.GetNextNode(event.NodeID, event.Action)
 		if hasNext {
+			nextNodeKey := fmt.Sprintf("input:node:%s", nextNode.Type())
+			if err := fer.stateStore.UpdateSharedData(event.FlowExecutionID, nextNodeKey, event.Result); err != nil {
+				execLogger.Error().Err(err).Msg("Failed to update shared data")
+				return fmt.Errorf("failed to update shared data: %w", err)
+			}
+
 			execLogger.Debug().
 				Str("nextNodeID", nextNode.ID()).
 				Str("nextNodeType", nextNode.Type()).
@@ -317,6 +325,12 @@ func (fer *FlowEventRouter) handleNodeCompleted(event core.NodeCompletedMessage)
 		}
 
 		execLogger.Info().Str("finalAction", event.Action).Msg("No next node found, completing flow")
+		finalKey := "result:final"
+		if err := fer.stateStore.UpdateSharedData(event.FlowExecutionID, finalKey, event.Action); err != nil {
+			execLogger.Error().Err(err).Msg("Failed to update shared data")
+			return fmt.Errorf("failed to update shared data: %w", err)
+		}
+
 		// No next node, flow is complete
 		return fer.completeFlow(event.FlowExecutionID, event.Action)
 	}
@@ -353,6 +367,7 @@ func (fer *FlowEventRouter) handleFlowStartRequested(event core.FlowStartRequest
 		BaseMessage: core.BaseMessage{
 			MessageType:     core.MessageTypeProgressUpdate,
 			FlowExecutionID: event.FlowExecutionID,
+			NodeExecutionID: event.NodeExecutionID,
 			Timestamp:       time.Now(),
 			FlowType:        fer.flowType,
 		},
@@ -412,11 +427,11 @@ func (fer *FlowEventRouter) executeNode(flowExecutionID string, node core.Node) 
 
 	event := core.ExecRequestedMessage{
 		BaseMessage: core.BaseMessage{
-			NodeExecutionID: nodeExecutionID,
 			MessageType:     core.MessageTypeExecRequested,
 			FlowExecutionID: flowExecutionID,
 			FlowType:        fer.flowType,
 			Timestamp:       time.Now(),
+			NodeExecutionID: nodeExecutionID,
 		},
 		NodeID:   node.ID(),
 		NodeType: node.Type(),

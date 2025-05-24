@@ -203,7 +203,12 @@ func NewWatermillEventRouter(logger watermill.LoggerAdapter) *WatermillEventRout
 
 // Start starts the router
 func (r *WatermillEventRouter) Start(ctx context.Context) error {
-	return r.Router.Run(ctx)
+	go func() {
+		if err := r.Router.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("Router stopped with error")
+		}
+	}()
+	return nil
 }
 
 // Stop stops the router
@@ -212,7 +217,11 @@ func (r *WatermillEventRouter) Stop() error {
 }
 
 // RegisterNodeWorker registers a node worker with the router
-func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
+func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) error {
+	if r.IsRunning() {
+		return fmt.Errorf("cannot register node worker while router is running")
+	}
+
 	nodeType := worker.NodeType()
 	r.NodeWorkers[nodeType] = worker
 
@@ -220,13 +229,11 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 	topic := fmt.Sprintf("node.%s", nodeType)
 	handlerName := fmt.Sprintf("handle_%s_node", nodeType)
 	
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		handlerName,
 		topic,
 		r.Subscriber,
-		"node.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			log.Debug().
 				Str("handlerName", handlerName).
 				Str("topic", topic).
@@ -242,7 +249,7 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 					Str("nodeType", nodeType).
 					Str("messageID", msg.UUID).
 					Msg("Router error handling node message")
-				return nil, err
+				return err
 			}
 			
 			log.Debug().
@@ -252,7 +259,7 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 				Str("messageID", msg.UUID).
 				Msg("Router successfully handled node message")
 				
-			return nil, nil
+			return nil
 		},
 	)
 
@@ -262,19 +269,25 @@ func (r *WatermillEventRouter) RegisterNodeWorker(worker core.NodeWorker) {
 		Str("handlerName", handlerName).
 		Msg("Registered node worker")
 	
-	// If router is already running, start the new handler
-	r.RunNewHandlers()
+	return nil
 }
 
 // RegisterAllNodeWorkers registers multiple node workers
-func (r *WatermillEventRouter) RegisterAllNodeWorkers(workers ...core.NodeWorker) {
+func (r *WatermillEventRouter) RegisterAllNodeWorkers(workers ...core.NodeWorker) error {
 	for _, worker := range workers {
-		r.RegisterNodeWorker(worker)
+		if err := r.RegisterNodeWorker(worker); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // RegisterFlowWorker registers a flow worker with the router
-func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
+func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) error {
+	if r.IsRunning() {
+		return fmt.Errorf("cannot register flow worker while router is running")
+	}
+
 	flowType := worker.FlowType()
 	r.FlowWorkers[flowType] = worker
 
@@ -282,13 +295,11 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	flowTopic := fmt.Sprintf("flow.%s", flowType)
 	flowHandlerName := fmt.Sprintf("handle_%s_flow", flowType)
 	
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		flowHandlerName,
 		flowTopic,
 		r.Subscriber,
-		"flow.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			log.Debug().
 				Str("handlerName", flowHandlerName).
 				Str("topic", flowTopic).
@@ -304,7 +315,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 					Str("flowType", flowType).
 					Str("messageID", msg.UUID).
 					Msg("Router error handling flow message")
-				return nil, err
+				return err
 			}
 			
 			log.Debug().
@@ -314,7 +325,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 				Str("messageID", msg.UUID).
 				Msg("Router successfully handled flow message")
 				
-			return nil, nil
+			return nil
 		},
 	)
 
@@ -322,13 +333,11 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 	nodeCompletedHandlerName := fmt.Sprintf("handle_%s_node_completed", flowType)
 	nodeCompletedTopic := "node.completed"
 	
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		nodeCompletedHandlerName,
 		nodeCompletedTopic,
 		r.Subscriber,
-		"node.completed.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			log.Debug().
 				Str("handlerName", nodeCompletedHandlerName).
 				Str("topic", nodeCompletedTopic).
@@ -344,7 +353,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 					Str("flowType", flowType).
 					Str("messageID", msg.UUID).
 					Msg("Router error handling node completion")
-				return nil, err
+				return err
 			}
 			
 			log.Debug().
@@ -354,7 +363,7 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 				Str("messageID", msg.UUID).
 				Msg("Router successfully handled node completion message")
 				
-			return nil, nil
+			return nil
 		},
 	)
 
@@ -365,31 +374,28 @@ func (r *WatermillEventRouter) RegisterFlowWorker(worker core.FlowWorker) {
 		Str("nodeCompletedHandlerName", nodeCompletedHandlerName).
 		Msg("Registered flow worker")
 	
-	// If router is already running, start the new handlers
-	r.RunNewHandlers()
+	return nil
 }
 
 // SetupFlowCompletionHandler sets up a handler for flow completed events
 func (r *WatermillEventRouter) SetupFlowCompletionHandler(handler func(core.FlowCompletedMessage) error) {
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		"handle_flow_completed",
 		"flow.completed",
 		r.Subscriber,
-		"flow.completion.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			var completed core.FlowCompletedMessage
 			if err := json.Unmarshal(msg.Payload, &completed); err != nil {
-				return nil, err
+				return err
 			}
 
 			if err := handler(completed); err != nil {
 				log.Error().Err(err).Msg("Error handling flow completion")
-				return nil, err
+				return err
 			}
-			return nil, nil
-			},
-)
+			return nil
+		},
+	)
 }
 
 // IsRunning returns true if the router is running
@@ -402,62 +408,52 @@ func (r *WatermillEventRouter) IsRunning() bool {
 	}
 }
 
-// RunNewHandlers runs any newly added handlers (needed when adding handlers to a running router)
-func (r *WatermillEventRouter) RunNewHandlers() error {
-	if r.IsRunning() {
-		go r.Router.RunHandlers(context.Background())
-	}
-	return nil
-}
+
 
 // SetupFlowFailureHandler sets up a handler for flow failed events
 func (r *WatermillEventRouter) SetupFlowFailureHandler(handler func(core.FlowFailedMessage) error) {
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		"handle_flow_failed",
 		"flow.failed",
 		r.Subscriber,
-		"flow.failure.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			var failed core.FlowFailedMessage
 			if err := json.Unmarshal(msg.Payload, &failed); err != nil {
-				return nil, err
+				return err
 			}
 
 			if err := handler(failed); err != nil {
 				log.Error().Err(err).Msg("Error handling flow failure")
-				return nil, err
+				return err
 			}
-			return nil, nil
+			return nil
 		},
 	)
 }
 
 // SetupProgressHandler sets up a handler for progress updates
 func (r *WatermillEventRouter) SetupProgressHandler(handler func(core.ProgressUpdateMessage) error) {
-	r.Router.AddHandler(
+	r.Router.AddNoPublisherHandler(
 		"handle_progress",
 		"progress",
 		r.Subscriber,
-		"progress.responses", // Unused but required by Watermill
-		r.Publisher,
-		func(msg *message.Message) ([]*message.Message, error) {
+		func(msg *message.Message) error {
 			var progress core.ProgressUpdateMessage
 			if err := json.Unmarshal(msg.Payload, &progress); err != nil {
-				return nil, err
+				return err
 			}
 
 			if err := handler(progress); err != nil {
 				log.Error().Err(err).Msg("Error handling progress update")
-				return nil, err
+				return err
 			}
-			return nil, nil
+			return nil
 		},
 	)
 }
 
 // NewWatermillEventRouterWithRedis creates a new router using Watermill with Redis Streams
-func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) *WatermillEventRouter {
+func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerAdapter) (*WatermillEventRouter, error) {
 	if logger == nil {
 		logger = watermill.NewStdLogger(false, false)
 	}
@@ -468,6 +464,12 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 		DB:   0,
 	})
 
+	// Test Redis connection
+	ctx := context.Background()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis at %s: %w", redisAddr, err)
+	}
+
 	// Create Redis publisher
 	publisher, err := redisstream.NewPublisher(
 		redisstream.PublisherConfig{
@@ -477,7 +479,7 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 		logger,
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Redis publisher")
+		return nil, fmt.Errorf("failed to create Redis publisher: %w", err)
 	}
 
 	// Create Redis subscriber for main application
@@ -491,23 +493,23 @@ func NewWatermillEventRouterWithRedis(redisAddr string, logger watermill.LoggerA
 		logger,
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Redis subscriber")
+		return nil, fmt.Errorf("failed to create Redis subscriber: %w", err)
 	}
 
 	router, err := message.NewRouter(message.RouterConfig{}, logger)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create router")
+		return nil, fmt.Errorf("failed to create router: %w", err)
 	}
 
 	// Setup middlewares for Redis router with dead letter queue support
 	SetupRouterMiddlewares(router, publisher, logger)
 
 	return &WatermillEventRouter{
-			Publisher:   publisher,
+		Publisher:   publisher,
 		Subscriber:  subscriber,
 		Router:      router,
 		NodeWorkers: make(map[string]core.NodeWorker),
 		FlowWorkers: make(map[string]core.FlowWorker),
 		Logger:      logger,
-	}
+	}, nil
 }

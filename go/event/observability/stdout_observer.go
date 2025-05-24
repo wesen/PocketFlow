@@ -70,20 +70,6 @@ func (o *StdoutObserver) SetVerbose(verbose bool) {
 	o.verbose = verbose
 }
 
-// GetSubscribedTopics returns the topics this observer subscribes to
-func (o *StdoutObserver) GetSubscribedTopics() []string {
-	return []string{
-		"flow.completed",
-		"flow.failed",
-		"node.completed",
-		"node.exec.failed",
-		"progress",
-		// Subscribe to specific flow and node types as well
-		"flow.*",
-		"node.*",
-	}
-}
-
 // HandleMessage processes a message from a subscribed topic
 func (o *StdoutObserver) HandleMessage(msg *message.Message) error {
 	if !o.enabled {

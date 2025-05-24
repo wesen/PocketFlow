@@ -66,15 +66,10 @@ func (n *SimpleNodeWorker) NodeType() string {
 	return n.nodeType
 }
 
-// SupportedMessageTypes returns the list of message types this worker can handle
-func (n *SimpleNodeWorker) SupportedMessageTypes() []string {
-	return []string{core.MessageTypeExecRequested}
-}
-
 // HandleMessage handles a message
 func (n *SimpleNodeWorker) HandleMessage(msgObj interface{}) error {
 	nodeLogger := log.With().Str("nodeType", n.nodeType).Logger()
-	
+
 	msg, ok := msgObj.(*message.Message)
 	if !ok {
 		nodeLogger.Error().Msg("NodeWorker received invalid message type")
@@ -109,42 +104,6 @@ func (n *SimpleNodeWorker) HandleMessage(msgObj interface{}) error {
 		execLogger.Warn().Msg("NodeWorker received unsupported message type")
 		return fmt.Errorf("unsupported message type: %s", base.MessageType)
 	}
-}
-
-func (n *SimpleNodeWorker) handleExecError(event core.ExecRequestedMessage, err error, retryCount int, willRetry bool) error {
-	execLogger := log.With().
-		Str("nodeType", n.nodeType).
-		Str("flowExecutionID", event.FlowExecutionID).
-		Str("nodeExecutionID", event.NodeExecutionID).
-		Logger()
-
-	// Log the error
-	execLogger.Error().Err(err).Msg("Node execution failed")
-
-	// Publish error message to node.failed topic instead of node's own topic
-	n.publisher.Publish(
-		"node.failed",
-		core.ExecFailedMessage{
-			BaseMessage: core.BaseMessage{
-				MessageType:     core.MessageTypeExecFailed,
-				FlowType:        event.FlowType,
-				FlowExecutionID: event.FlowExecutionID,
-				NodeExecutionID: event.NodeExecutionID,
-				Timestamp:       time.Now(),
-			},
-			NodeType:     n.nodeType,
-			NodeID:       event.NodeID,
-			ErrorMessage: err.Error(),
-			RetryCount:   retryCount,
-			WillRetry:    willRetry,
-		},
-	)
-
-	// Publish error progress update
-	n.publishProgressUpdate(event.FlowType, event.FlowExecutionID, event.NodeExecutionID, "node_failed", 0.0,
-		fmt.Sprintf("%s node failed: %s", n.nodeType, err.Error()))
-
-	return nil
 }
 
 func (n *SimpleNodeWorker) handleExecRequested(event core.ExecRequestedMessage) error {
@@ -281,7 +240,7 @@ func (n *SimpleNodeWorker) handleNodeExecError(event core.ExecRequestedMessage, 
 
 	// Publish error message to flow-scoped failed topic
 	failedTopic := fmt.Sprintf("%s.node.failed", event.FlowType)
-	n.publisher.Publish(
+	err2 := n.publisher.Publish(
 		failedTopic,
 		core.ExecFailedMessage{
 			BaseMessage: core.BaseMessage{
@@ -298,10 +257,16 @@ func (n *SimpleNodeWorker) handleNodeExecError(event core.ExecRequestedMessage, 
 			WillRetry:    willRetry,
 		},
 	)
+	if err2 != nil {
+		log.Error().Err(err2).Msg("NodeWorker failed to publish failure message")
+		// continue
+	}
+
+	execLogger.Debug().Msg("NodeWorker successfully published failure message")
 
 	// Publish failure completion message to flow-scoped topic
 	completionTopic := fmt.Sprintf("%s.node.completed", event.FlowType)
-	n.publisher.Publish(
+	err2 = n.publisher.Publish(
 		completionTopic,
 		core.NodeCompletedMessage{
 			BaseMessage: core.BaseMessage{
@@ -320,7 +285,14 @@ func (n *SimpleNodeWorker) handleNodeExecError(event core.ExecRequestedMessage, 
 		},
 	)
 
-	return err
+	if err2 != nil {
+		log.Error().Err(err2).Msg("NodeWorker failed to publish failure completion message")
+		// continue
+	} else {
+		execLogger.Debug().Msg("NodeWorker successfully published failure completion message")
+	}
+
+	return err2
 }
 
 func (n *SimpleNodeWorker) publishProgressUpdate(flowType, flowExecutionID, nodeExecutionID, status string, progress float64, message string) {
@@ -349,9 +321,3 @@ func (n *SimpleNodeWorker) NewNode(params core.NodeParams) core.Node {
 		params:   params,
 	}
 }
-
-// Legacy methods (simplified implementations)
-func (n *SimpleNodeWorker) HandlePrepRequested(event core.NodePrepRequested) {}
-func (n *SimpleNodeWorker) HandleExecRequested(event core.NodeExecRequested) {}
-func (n *SimpleNodeWorker) HandlePostRequested(event core.NodePostRequested) {}
-func (n *SimpleNodeWorker) HandleExecFailed(event core.NodeExecFailed)       {}

@@ -67,39 +67,6 @@ func NewSemanticDataAccessor(store StateStore, flowExecutionID string) *Semantic
 	}
 }
 
-func (sda *SemanticDataAccessor) UserInput() (string, error) {
-	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "user_input")
-	if !exists {
-		return "", fmt.Errorf("user_input not found")
-	}
-	if str, ok := value.(string); ok {
-		return str, nil
-	}
-	return "", fmt.Errorf("user_input is not a string")
-}
-
-func (sda *SemanticDataAccessor) Intent() (string, error) {
-	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "intent")
-	if !exists {
-		return "", fmt.Errorf("intent not found")
-	}
-	if str, ok := value.(string); ok {
-		return str, nil
-	}
-	return "", fmt.Errorf("intent is not a string")
-}
-
-func (sda *SemanticDataAccessor) Response() (string, error) {
-	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, "response")
-	if !exists {
-		return "", fmt.Errorf("response not found")
-	}
-	if str, ok := value.(string); ok {
-		return str, nil
-	}
-	return "", fmt.Errorf("response is not a string")
-}
-
 func (sda *SemanticDataAccessor) GetString(key string) (string, error) {
 	value, exists := sda.store.GetBySemantic(sda.flowExecutionID, key)
 	if !exists {

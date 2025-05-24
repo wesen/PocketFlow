@@ -143,7 +143,7 @@ type answerHandler struct {
 
 func (h *answerHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get user input using semantic data access
-	userAnswer, err := ctx.SemanticData.UserInput()
+	userAnswer, err := ctx.SemanticData.GetString("input:node:answer")
 	if err != nil {
 		return nil, fmt.Errorf("user input not found: %w", err)
 	}

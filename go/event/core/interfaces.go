@@ -43,17 +43,8 @@ type NodeWorker interface {
 	// Get the type of node this worker handles
 	NodeType() string
 
-	// Get the list of message types this worker can handle
-	SupportedMessageTypes() []string
-
 	// Handle a message
 	HandleMessage(msg interface{}) error
-
-	// Legacy methods
-	HandlePrepRequested(event NodePrepRequested)
-	HandleExecRequested(event NodeExecRequested)
-	HandlePostRequested(event NodePostRequested)
-	HandleExecFailed(event NodeExecFailed)
 
 	NewNode(params NodeParams) Node
 }

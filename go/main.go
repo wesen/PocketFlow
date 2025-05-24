@@ -159,14 +159,14 @@ func main() {
 			log.Info().Bool("verbose", *observabilityVerbose).Msg("✓ Added colorized console observer")
 		}
 
-		// Add flow tracer for detailed flow tracking
-		flowTracer := observability.NewStdoutFlowTracer("flow_tracer")
-		err = obsManager.AddObserver(flowTracer)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to add flow tracer")
-		} else {
-			log.Info().Msg("✓ Added flow tracer for status tracking")
-		}
+		// // Add flow tracer for detailed flow tracking
+		// flowTracer := observability.NewStdoutFlowTracer("flow_tracer")
+		// err = obsManager.AddObserver(flowTracer)
+		// if err != nil {
+		// 	log.Error().Err(err).Msg("Failed to add flow tracer")
+		// } else {
+		// 	log.Info().Msg("✓ Added flow tracer for status tracking")
+		// }
 
 		log.Info().Int("observers", len(obsManager.ListObservers())).Msg("🎯 Observability system ready")
 	}
@@ -183,14 +183,14 @@ func main() {
 	case "qa":
 		flowName = "Question-Answering Flow"
 		flow = qa.CreateQAFlow()
-		runner.RegisterFlow(flow)
 		setupQANodeWorkers(runner)
+		runner.RegisterFlow(flow)
 
 	case "branching":
 		flowName = "Branching Intent Flow"
 		flow = branching.CreateBranchingFlow()
-		runner.RegisterFlow(flow)
 		setupBranchingNodeWorkers(runner)
+		runner.RegisterFlow(flow)
 
 	default:
 		log.Fatal().Str("flowType", *flowType).Msg("Unknown flow type")
@@ -403,9 +403,14 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 	// Create a runner for the web server (use Redis by default for web server)
 	var runner *event.Runner
 	var router *event.WatermillEventRouter
+	var err error
 
 	if useRedis {
-		router = event.NewWatermillEventRouterWithRedis(redisAddr, nil)
+		router, err = event.NewWatermillEventRouterWithRedis(redisAddr, nil)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create Redis event router")
+			return err
+		}
 		runner = event.NewRunnerWithRedis(redisAddr, event.WithDebugMode(true))
 	} else {
 		router = event.NewWatermillEventRouter(nil)
@@ -435,7 +440,7 @@ func startWebServer(port int, useRedis bool, redisAddr string) error {
 	}
 
 	// Start the runner
-	err := runner.Start()
+	err = runner.Start()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to start runner")
 		return err

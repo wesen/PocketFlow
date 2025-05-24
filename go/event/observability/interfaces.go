@@ -19,9 +19,6 @@ type Observer interface {
 	// SetEnabled enables or disables this observer
 	SetEnabled(enabled bool)
 
-	// GetSubscribedTopics returns the list of topics this observer wants to subscribe to
-	GetSubscribedTopics() []string
-
 	// HandleMessage processes a message from a subscribed topic
 	HandleMessage(msg *message.Message) error
 }
@@ -103,6 +100,9 @@ type ObservabilityManager interface {
 
 	// Stop shuts down the observability system
 	Stop() error
+
+	// IsRunning returns true if the observability system is running
+	IsRunning() bool
 }
 
 // FlowStatus represents the current status of a flow execution

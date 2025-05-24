@@ -25,7 +25,7 @@ func (h *IntentClassifierHandler) DeclareOutputs() []semantic.SemanticOutput {
 // Prep handles the preparation phase
 func (h *IntentClassifierHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get user input using semantic data accessor
-	userInput, err := ctx.SemanticData.UserInput()
+	userInput, err := ctx.SemanticData.GetString("result:node:user_input")
 	if err != nil {
 		// Fallback to params or default
 		if userQuestion, ok := ctx.Params["default_question"].(string); ok {
@@ -75,7 +75,7 @@ func (h *WeatherHandler) DeclareOutputs() []semantic.SemanticOutput {
 // Prep handles the preparation phase
 func (h *WeatherHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get user input using semantic data accessor
-	userQuery, err := ctx.SemanticData.UserInput()
+	userQuery, err := ctx.SemanticData.GetString("result:node:user_input")
 	if err != nil {
 		return nil, fmt.Errorf("user input not found: %w", err)
 	}
@@ -194,7 +194,7 @@ func (h *GeneralHandler) DeclareOutputs() []semantic.SemanticOutput {
 // Prep handles the preparation phase
 func (h *GeneralHandler) Prep(ctx semantic.NodeContext) (interface{}, error) {
 	// Get user input using semantic data accessor
-	userQuery, err := ctx.SemanticData.UserInput()
+	userQuery, err := ctx.SemanticData.GetString("result:node:user_input")
 	if err != nil {
 		return nil, fmt.Errorf("user input not found: %w", err)
 	}

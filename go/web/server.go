@@ -349,7 +349,7 @@ func (h *UserInputHandler) Exec(ctx semantic.NodeContext, prepResult interface{}
 	userInput := "What's the weather like today?"
 
 	// Log semantic data access for demonstration
-	if intent, err := ctx.SemanticData.Intent(); err == nil {
+	if intent, err := ctx.SemanticData.GetString("result:node:intent"); err == nil {
 		userInput = fmt.Sprintf("Following up on %s: What's the weather like today?", intent)
 	}
 
